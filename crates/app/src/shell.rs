@@ -1,4 +1,5 @@
 //! The window: a header (counters, tabs, range, search, filters) above the tab on screen.
+use crate::dash::{DashEvent, DashView};
 use crate::map::{MapEvent, MapView};
 use crate::state::{Filters, RANGES, norm, visible};
 use crate::timeline::{TimelineEvent, TimelineView};
@@ -29,6 +30,7 @@ pub struct Shell {
     usage: Option<Arc<UsageView>>,
     map: Entity<MapView>,
     timeline: Entity<TimelineView>,
+    dash: Entity<DashView>,
     machine: Entity<Machine>,
     search: Entity<InputState>,
     _tasks: Vec<Task<()>>,
@@ -41,6 +43,7 @@ impl Shell {
     pub fn new(machine: Entity<Machine>, mut feed: GraphFeed, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let map = cx.new(MapView::new);
         let timeline = cx.new(TimelineView::new);
+        let dash = cx.new(DashView::new);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search   /"));
         let subs = vec![
             // One selection for both views.
@@ -49,6 +52,15 @@ impl Shell {
                     let sel = map.read(cx).selected.clone();
                     s.timeline.update(cx, |t, _| t.selected = sel);
                     cx.notify();
+                }
+            }),
+            // "Top sessions": open the session on the map.
+            cx.subscribe(&dash, |s, _, e: &DashEvent, cx| match e {
+                DashEvent::Open(id) => {
+                    let sel = Some(id.clone());
+                    s.map.update(cx, |m, _| m.selected = sel.clone());
+                    s.timeline.update(cx, |t, _| t.selected = sel);
+                    s.set_tab(Tab::Map, cx);
                 }
             }),
             cx.subscribe(&timeline, |s, timeline, e: &TimelineEvent, cx| match e {
@@ -89,6 +101,7 @@ impl Shell {
         }
         map.update(cx, |m, _| m.active = tab == Tab::Map);
         timeline.update(cx, |t, _| t.active = tab == Tab::Timeline);
+        dash.update(cx, |d, _| d.active = tab == Tab::Usage);
         Shell {
             tab,
             filters,
@@ -96,6 +109,7 @@ impl Shell {
             usage: None,
             map,
             timeline,
+            dash,
             machine,
             search,
             _tasks: vec![updates],
@@ -112,6 +126,9 @@ impl Shell {
             self.map.update(cx, |m, cx| m.set_graph(g.clone(), &filters, cx));
             self.timeline.update(cx, |t, cx| t.set_graph(g, &filters, cx));
         }
+        if let Some(u) = self.usage.clone() {
+            self.dash.update(cx, |d, cx| d.set_usage(u, cx));
+        }
         cx.notify();
     }
 
@@ -119,6 +136,7 @@ impl Shell {
         self.tab = tab;
         self.map.update(cx, |m, _| m.active = tab == Tab::Map);
         self.timeline.update(cx, |t, _| t.active = tab == Tab::Timeline);
+        self.dash.update(cx, |d, _| d.active = tab == Tab::Usage);
         cx.notify();
     }
 
@@ -284,7 +302,9 @@ impl Shell {
         let ready = match self.tab {
             Tab::Map => self.map.read(cx).settled(),
             Tab::Machine => self.machine.read(cx).ready(),
-            _ => self.graph.is_some(),
+            // MDB_WHEEL_EARLY: start while the history is still being read.
+            Tab::Usage => self.usage.as_ref().is_some_and(|u| u.ready || std::env::var("MDB_WHEEL_EARLY").is_ok()),
+            Tab::Timeline => self.graph.is_some(),
         };
         if self.snapshot_taken || !ready {
             window.request_animation_frame();
@@ -323,6 +343,14 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
     window.on_next_frame(move |window, cx| {
         let ms = crate::glide::TRACE_START.get().map_or(0.0, |s| s.elapsed().as_secs_f32() * 1000.0);
         let mut sent = sent;
+        // MDB_CLICK: one click at the point instead of the wheel.
+        if sent == 0 && std::env::var("MDB_CLICK").is_ok() {
+            eprintln!("trace click {ms:.1} 0");
+            let down = MouseDownEvent { button: MouseButton::Left, position: w.at, click_count: 1, ..Default::default() };
+            window.dispatch_event(PlatformInput::MouseDown(down), cx);
+            let up = MouseUpEvent { button: MouseButton::Left, position: w.at, click_count: 1, ..Default::default() };
+            window.dispatch_event(PlatformInput::MouseUp(up), cx);
+        }
         while sent < w.count && ms >= sent as f32 * w.gap {
             let e = ScrollEvent {
                 position: w.at,
@@ -363,9 +391,7 @@ impl Render for Shell {
             Tab::Map => self.map.clone().into_any_element(),
             Tab::Machine => self.machine.clone().into_any_element(),
             Tab::Timeline => self.timeline.clone().into_any_element(),
-            Tab::Usage => {
-                div().size_full().flex().items_center().justify_center().text_color(muted()).child("Coming next").into_any_element()
-            }
+            Tab::Usage => self.dash.clone().into_any_element(),
         };
         div()
             .size_full()
