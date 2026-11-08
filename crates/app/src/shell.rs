@@ -53,6 +53,8 @@ impl Tab {
 const PANEL_TAU: f32 = 0.06;
 const SLIDE_IN: Duration = Duration::from_millis(450);
 const FEED_MAX: usize = 7;
+/// Below this window width, the side panel lies over the map instead of next to it.
+const NARROW: f32 = 1100.0;
 /// The feed's width open, and closed (its title and arrow only).
 const FEED_OPEN_W: f32 = 380.0;
 const FEED_CLOSED_W: f32 = 118.0;
@@ -99,6 +101,8 @@ pub struct Shell {
     search: Entity<InputState>,
     /// The side panel: wanted open, its width on screen, when it last moved.
     panel_open: bool,
+    /// Narrow windows: the panel over the map, closed unless opened there.
+    panel_narrow_open: bool,
     panel_w: f32,
     panel_last: Instant,
     /// The history loader: how full its bar is on screen, how visible it is (it fades out once done), its last frame.
@@ -221,6 +225,7 @@ impl Shell {
             machine,
             search,
             panel_open: saved.panel,
+            panel_narrow_open: false,
             panel_w: if saved.panel { panel::WIDTH } else { 0.0 },
             panel_last: Instant::now(),
             load_fill: 0.0,
@@ -584,43 +589,66 @@ impl Shell {
         };
         let map_tab = matches!(self.tab, Tab::Map | Tab::Timeline);
         let replaying = self.replay.is_some();
-        // The tabs come first and never move; the window's title already names the app.
-        div()
+        // The tabs come first and never move; the window's title already names the app. When the window is too
+        // narrow for one row, the map's controls go to a second row, which wraps again if it must.
+        let one_row = !map_tab || f32::from(window.viewport_size().width) >= 1240.0;
+        let narrow = f32::from(window.viewport_size().width) < NARROW;
+        let panel_on = if narrow { self.panel_narrow_open } else { self.panel_open };
+        let controls: Vec<AnyElement> = if map_tab {
+            vec![
+                ranges.into_any_element(),
+                div().w(px(120.0)).flex_shrink_0().child(Input::new(&self.search)).into_any_element(),
+                project.into_any_element(),
+                toggle("archived", "Archived", self.filters.archived, |f| f.archived = !f.archived).into_any_element(),
+                toggle("agents", "Subagents", self.filters.agents, |f| f.agents = !f.agents).into_any_element(),
+                ctl("panel-toggle", panel_on)
+                    .child(panel_icon(panel_on))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.panel_last = Instant::now();
+                        if narrow {
+                            // Narrow, the panel lies over the map: opening it there is not a saved choice.
+                            s.panel_narrow_open = !s.panel_narrow_open;
+                        } else {
+                            s.panel_open = !s.panel_open;
+                            let open = s.panel_open;
+                            settings::change(cx, |st| st.panel = open);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                ctl("replay", replaying)
+                    .child(if replaying { "■ Stop" } else { "▶ Replay" })
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        if s.replay.take().is_none() {
+                            s.start_replay(cx);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            ]
+        } else {
+            Vec::new()
+        };
+        let update = self.update_button(cx);
+        let first = div()
             .relative()
             .flex()
             .items_center()
             .gap(px(12.0))
-            .px(px(16.0))
-            .py(px(10.0))
-            .border_b_1()
-            .border_color(line())
             .child(tabs)
             .children(self.loader(wide))
             .children(stats.filter(|_| map_tab))
-            .child(div().flex_1())
-            .when(map_tab, |d| {
-                d.child(ranges)
-                    .child(div().w(px(120.0)).child(Input::new(&self.search)))
-                    .child(project)
-                    .child(toggle("archived", "Archived", self.filters.archived, |f| f.archived = !f.archived))
-                    .child(toggle("agents", "Subagents", self.filters.agents, |f| f.agents = !f.agents))
-                    .child(ctl("panel-toggle", self.panel_open).child(panel_icon(self.panel_open)).on_click(cx.listener(|s, _, _, cx| {
-                        s.panel_open = !s.panel_open;
-                        s.panel_last = Instant::now();
-                        let open = s.panel_open;
-                        settings::change(cx, |st| st.panel = open);
-                        cx.notify();
-                    })))
-                    .child(ctl("replay", replaying).child(if replaying { "■ Stop" } else { "▶ Replay" }).on_click(cx.listener(
-                        |s, _, _, cx| {
-                            if s.replay.take().is_none() {
-                                s.start_replay(cx);
-                            }
-                            cx.notify();
-                        },
-                    )))
-            })
-            .children(self.update_button(cx))
+            .child(div().flex_1());
+        let bar = div().px(px(16.0)).py(px(10.0)).border_b_1().border_color(line());
+        if one_row {
+            bar.child(first.children(controls).children(update))
+        } else {
+            bar.flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(first.children(update))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.0)).children(controls))
+        }
     }
 
     /// While the history is read after launch: how far it is, in the free room right of the tabs (laid over the bar,
@@ -636,7 +664,7 @@ impl Shell {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .left(px(if wide { 560.0 } else { 276.0 }))
+                .left(px(if wide { 544.0 } else { 256.0 }))
                 .flex()
                 .items_center()
                 .opacity(self.load_alpha)
@@ -1184,7 +1212,8 @@ impl Render for Shell {
         }
         self.tick_replay(window, cx);
         // The side panel opens and closes smoothly; the map and the timeline give it room as it goes.
-        let target = if self.panel_open { panel::WIDTH } else { 0.0 };
+        let narrow = f32::from(window.viewport_size().width) < NARROW;
+        let target = if (narrow && self.panel_narrow_open) || (!narrow && self.panel_open) { panel::WIDTH } else { 0.0 };
         if self.panel_w != target {
             let now = Instant::now();
             self.panel_w = crate::glide::ease(self.panel_w, target, (now - self.panel_last).as_secs_f32() * crate::glide::TAU / PANEL_TAU);
@@ -1237,20 +1266,30 @@ impl Render for Shell {
         };
         self.panel.update(cx, |p, _| p.active = map_tab && self.panel_w > 0.0);
         let wide = f32::from(window.viewport_size().width) >= 1700.0;
-        div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.0)).child(self.header(wide, window, cx)).child(
-            div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().child(body)).when(map_tab && self.panel_w > 0.0, |d| {
-                d.child(
-                    div()
-                        .h_full()
-                        .flex_none()
-                        .w(px(self.panel_w))
-                        .overflow_hidden()
-                        .border_l_1()
-                        .border_color(line())
-                        .child(div().w(px(panel::WIDTH)).h_full().child(self.panel.clone())),
-                )
-            }),
-        )
+        // The panel: next to the map and the timeline, or over them when the window is narrow.
+        let side = (map_tab && self.panel_w > 0.0).then(|| {
+            div()
+                .h_full()
+                .flex_none()
+                .w(px(self.panel_w))
+                .overflow_hidden()
+                .border_l_1()
+                .border_color(line())
+                .child(div().w(px(panel::WIDTH)).h_full().child(self.panel.clone()))
+        });
+        let content = div().flex_1().min_w_0().h_full().child(body);
+        let main = if narrow {
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .flex()
+                .child(content)
+                .children(side.map(|p| div().absolute().top_0().bottom_0().right_0().shadow_lg().bg(panel()).child(p)))
+        } else {
+            div().flex_1().min_h_0().flex().child(content).children(side)
+        };
+        div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.0)).child(self.header(wide, window, cx)).child(main)
     }
 }
 

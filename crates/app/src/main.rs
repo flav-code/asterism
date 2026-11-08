@@ -81,10 +81,17 @@ fn main() {
         cx.set_global(settings::Settings::load());
         // The inputs and other components follow the window's dark palette, not the system's light one.
         gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
-        let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
+        // Snapshot builds can open at another size (MDB_WINDOW=900x700), to check the layout narrow.
+        let (w, h) = std::env::var("MDB_WINDOW")
+            .ok()
+            .filter(|_| cfg!(feature = "snapshot"))
+            .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+            .unwrap_or((1320.0, 860.0));
+        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("Asterism".into()), ..Default::default() }),
+            window_min_size: Some(size(px(760.), px(520.))),
             ..Default::default()
         };
         // Snapshot runs float almost off-screen and take no focus: another window over them would stop their frames

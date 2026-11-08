@@ -985,7 +985,8 @@ impl Render for MapView {
                     .child(div().text_size(px(11.0)).text_color(faint()).child("Titles"))
                     .child(titles_control),
             )
-            .child(legend())
+            // Narrow, the legend would cover the live feed: it goes.
+            .when(f32::from(self.canvas.get().size.width) >= 680.0, |d| d.child(legend()))
             .children(tip)
     }
 }

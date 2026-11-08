@@ -807,7 +807,9 @@ impl Render for DashView {
                         first = false;
                     }
                     let last = i + 1 == d.cols.len();
-                    if i % every == 0 || last {
+                    // A date too close to "today" (the last column) would run into it.
+                    let near_last = !last && (d.cols.len() - 1 - i) as f32 * step < 56.0;
+                    if (i % every == 0 && !near_last) || last {
                         let (label, color) = if last { (today_word.to_string(), text()) } else { (c.label.clone(), faint()) };
                         paint_text(
                             window,
