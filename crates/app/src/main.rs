@@ -1,6 +1,8 @@
 //! The app: one window with the session map, the timeline, token usage and what runs on the machine.
 //! Two threads gather the data (the machine every 2 s; sessions, messages and usage from the files Claude Code
 //! keeps); the window only ever reads their latest result.
+// Windows: a GUI app, or Windows opens an empty console next to the window (and closing it quits the app).
+#![cfg_attr(windows, windows_subsystem = "windows")]
 mod dash;
 #[cfg(feature = "snapshot")]
 mod demo;
