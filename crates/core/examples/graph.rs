@@ -32,6 +32,21 @@ fn main() {
     let desktop = store.refresh(&home);
     let graph = viz.build(&home, &desktop, &live, now()); // every session's transcript, now that all were read once
     println!("a build once ready: {:?}", t.elapsed());
+    let mut ids = BTreeMap::new();
+    for m in &graph.messages {
+        *ids.entry(m.id.as_str()).or_insert(0) += 1;
+    }
+    let dups: Vec<_> = ids.iter().filter(|(_, c)| **c > 1).collect();
+    println!("messages {}, ids seen twice or more: {}", graph.messages.len(), dups.len());
+    for (id, c) in dups.iter().take(5) {
+        let ms: Vec<_> = graph
+            .messages
+            .iter()
+            .filter(|m| m.id == **id)
+            .map(|m| (m.from.as_str(), m.to.as_str(), m.ts, format!("{:?}", m.kind)))
+            .collect();
+        println!("  {id} ×{c}: {ms:?}");
+    }
     let mut kinds = BTreeMap::new();
     for n in &graph.nodes {
         *kinds.entry(format!("{:?}", n.kind)).or_insert(0) += 1;

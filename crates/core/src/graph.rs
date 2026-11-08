@@ -14,7 +14,10 @@ use std::time::UNIX_EPOCH;
 /// Before the full scan is done, transcripts of sessions idle for longer than this are not read.
 const SCAN_DAYS: u64 = 14;
 /// Transcripts read per call while the full scan runs, newest first.
-const FULL_SCAN_STEP: usize = 60;
+/// Bytes of transcripts read per build until all were read once: little for the first build, so the map shows
+/// within a fraction of a second, then more each build.
+const FIRST_READ: u64 = 8 << 20;
+const READ_BUDGET: u64 = 96 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -331,6 +334,7 @@ pub struct Visualizer {
     index: HashMap<String, PathBuf>,
     /// The last map: who each transcript belongs to, for usage per session.
     cli_to_node: HashMap<String, String>,
+    builds: u64,
     titles: HashMap<String, (String, String, NodeKind)>,
 }
 
@@ -357,14 +361,22 @@ impl Visualizer {
         self.all = all;
     }
 
-    /// One step of reading every transcript: the first pass in steps, then every file again for what it gained.
-    fn full_scan_step(&mut self, now_ms: u64) {
-        let end = if self.ready { self.all.len() } else { (self.scanned + FULL_SCAN_STEP).min(self.all.len()) };
-        let start = if self.ready { 0 } else { self.scanned };
-        for f in &self.all[start..end] {
-            self.transcripts.scan(f, &mut self.usage, now_ms);
+    /// One step of reading every transcript: the first pass within `budget`, newest files first, then every file again
+    /// for what it gained.
+    fn full_scan_step(&mut self, now_ms: u64, budget: &mut u64) {
+        if self.ready {
+            for f in &self.all {
+                self.transcripts.scan(f, &mut self.usage, now_ms);
+            }
+        } else {
+            while self.scanned < self.all.len() && *budget > 0 {
+                let f = self.all[self.scanned].clone();
+                if !self.transcripts.scan_within(&f, &mut self.usage, now_ms, budget).is_none_or(|t| t.complete()) {
+                    break;
+                }
+                self.scanned += 1;
+            }
         }
-        self.scanned = end;
         self.ready = self.scanned >= self.all.len();
         self.usage.trim_minutes(now_ms);
     }
@@ -404,7 +416,8 @@ impl Visualizer {
             }
             for note in &d.notes {
                 reports.push(Msg {
-                    id: format!("r:{}:{}", d.id, note.key),
+                    // The note's key is shared by notes from several sessions (a batch): the sender and time make it unique.
+                    id: format!("r:{}:{}:{}:{}", d.id, note.from, note.key, note.at),
                     from: note.from.clone(),
                     to: d.id.clone(),
                     ts: note.at,
@@ -462,15 +475,24 @@ impl Visualizer {
 
         // Transcripts: messages, latest move, tokens; subagents. Before the full scan, recent sessions only.
         let cutoff = if self.ready { 0 } else { now_ms.saturating_sub(SCAN_DAYS * 86_400_000) };
+        let mut budget = match (self.ready, self.builds) {
+            (true, _) => u64::MAX,
+            (false, 0) => FIRST_READ,
+            _ => READ_BUDGET,
+        };
+        self.builds += 1;
         let mut messages: Vec<Msg> = Vec::new();
-        for id in order.clone() {
+        // Open and recent sessions first, so what the map shows first fills in first.
+        let mut first: Vec<String> = order.clone();
+        first.sort_by_key(|id| std::cmp::Reverse((nodes[id].live, nodes[id].last_at)));
+        for id in first {
             let (is_live, last_at) = (nodes[&id].live, nodes[&id].last_at);
             if !is_live && last_at < cutoff {
                 continue;
             }
             for c in cli.get(&id).cloned().unwrap_or_default() {
                 let Some(path) = self.index.get(&c).cloned() else { continue };
-                let Some(st) = self.transcripts.scan(&path, &mut self.usage, now_ms) else { continue };
+                let Some(st) = self.transcripts.scan_within(&path, &mut self.usage, now_ms, &mut budget) else { continue };
                 let (tokens, last, title) = (st.tokens.total, st.last.clone(), st.title.clone());
                 messages.extend(st.sent.iter().map(|s| Msg {
                     id: s.id.clone(),
@@ -485,7 +507,10 @@ impl Visualizer {
                 }));
                 let mut agents = Vec::new();
                 for a in subagents(&path) {
-                    let atok = self.transcripts.scan(&a.transcript, &mut self.usage, now_ms).map(|t| Tok::default().add(&t.tokens.total));
+                    let atok = self
+                        .transcripts
+                        .scan_within(&a.transcript, &mut self.usage, now_ms, &mut budget)
+                        .map(|t| Tok::default().add(&t.tokens.total));
                     agents.push((a, atok));
                 }
                 let n = nodes.get_mut(&id).expect("listed above");
@@ -593,7 +618,7 @@ impl Visualizer {
         resolved.sort_by_key(|m| m.ts);
         edges.retain(|e| nodes.contains_key(&e.from) && nodes.contains_key(&e.to));
 
-        self.full_scan_step(now_ms);
+        self.full_scan_step(now_ms, &mut budget);
         self.cli_to_node = cli_to_node;
         self.titles = nodes.values().map(|n| (n.id.clone(), (n.title.clone(), n.project.clone(), n.kind))).collect();
         let nodes = order.into_iter().filter_map(|id| nodes.remove(&id)).collect();
@@ -629,7 +654,9 @@ impl Visualizer {
                     let title = ost
                         .and_then(|o| o.title.clone().or_else(|| o.tokens.slug.clone()))
                         .unwrap_or_else(|| uuid.chars().take(8).collect());
-                    let project = project_of(st.tokens.cwd.as_deref().unwrap_or("?"));
+                    // The session's own folder, not a subagent's (which may work elsewhere).
+                    let cwd = ost.and_then(|o| o.tokens.cwd.as_deref()).or(st.tokens.cwd.as_deref());
+                    let project = project_of(cwd.unwrap_or("?"));
                     (title, project, NodeKind::Cli)
                 });
                 SessionUsage { id, title, project, kind, days: BTreeMap::new() }

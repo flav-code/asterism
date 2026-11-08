@@ -43,6 +43,15 @@ pub struct Transcript {
     pub agent: bool,
     /// Last change, in ms since the epoch.
     pub modified: u64,
+    /// The file's size when last looked at.
+    size: u64,
+}
+
+impl Transcript {
+    /// Everything the file held when last looked at has been read.
+    pub fn complete(&self) -> bool {
+        self.offset >= self.size
+    }
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -146,6 +155,12 @@ pub struct Transcripts {
 impl Transcripts {
     /// Reads what was appended to `path` since the last call; None when the file is gone.
     pub fn scan(&mut self, path: &Path, usage: &mut Usage, now_ms: u64) -> Option<&Transcript> {
+        let mut no_limit = u64::MAX;
+        self.scan_within(path, usage, now_ms, &mut no_limit)
+    }
+
+    /// `scan`, reading at most `budget` bytes (taken from it): the rest waits for a later call.
+    pub fn scan_within(&mut self, path: &Path, usage: &mut Usage, now_ms: u64, budget: &mut u64) -> Option<&Transcript> {
         let md = fs::metadata(path).ok()?;
         let len = md.len();
         let st = self
@@ -156,16 +171,19 @@ impl Transcripts {
             *st = Transcript { agent: st.agent, ..Default::default() }; // rewritten from scratch
         }
         st.modified = md.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
-        if len > st.offset {
+        st.size = len;
+        if len > st.offset && *budget > 0 {
             let mut f = fs::File::open(path).ok()?;
             f.seek(SeekFrom::Start(st.offset)).ok()?;
-            let mut chunk = vec![0; 8 << 20];
-            while st.offset < len {
-                let read = f.read(&mut chunk).ok()?;
+            let mut chunk = vec![0; (len - st.offset).min(8 << 20).min(*budget) as usize];
+            while st.offset < len && *budget > 0 {
+                let want = (chunk.len() as u64).min(*budget) as usize;
+                let read = f.read(&mut chunk[..want]).ok()?;
                 if read == 0 {
                     break;
                 }
                 st.offset += read as u64;
+                *budget -= read as u64;
                 let mut data = std::mem::take(&mut st.carry);
                 data.extend_from_slice(&chunk[..read]);
                 let mut start = 0;
@@ -183,6 +201,21 @@ impl Transcripts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_within_a_budget_then_finishes() {
+        let dir = std::env::temp_dir().join(format!("mdb-budget-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let line = r#"{"type":"user","timestamp":"2026-10-31T01:00:00Z","message":{"content":"hi"}}"#;
+        fs::write(&path, format!("{line}\n").repeat(100)).unwrap();
+        let (mut t, mut usage) = (Transcripts::default(), Usage::default());
+        let mut budget = 1000;
+        assert!(!t.scan_within(&path, &mut usage, 0, &mut budget).unwrap().complete());
+        assert_eq!(budget, 0, "the whole budget is used");
+        assert!(t.scan(&path, &mut usage, 0).unwrap().complete());
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_sent_message_and_its_result() {
