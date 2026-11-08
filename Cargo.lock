@@ -294,6 +294,7 @@ version = "0.1.0"
 dependencies = [
  "asterism-core",
  "chrono",
+ "embed-resource",
  "gpui-kit",
  "gpui-pre-platform",
  "serde_json",

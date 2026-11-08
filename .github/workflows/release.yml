@@ -55,6 +55,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p asterism
+      # Nobody else runs it on Windows before release: it must start, stay up, and show its window (the
+      # screenshot, with the logo in the taskbar, is kept with the run).
+      - name: Asterism starts
+        shell: pwsh
+        run: |
+          $p = Start-Process target\release\asterism.exe -PassThru
+          Start-Sleep 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($img).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $img.Save("$PWD\windows.png")
+          if ($p.HasExited) { throw "Asterism quit with code $($p.ExitCode)" }
+          Stop-Process $p
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-windows
+          path: windows.png
       - name: Installer
         shell: pwsh
         run: |
@@ -79,8 +98,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: macos-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: dist
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
