@@ -3987,6 +3987,8 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-platform",
  "mdb-core",
+ "serde_json",
+ "sysinfo 0.40.1",
  "tokio",
 ]
 
@@ -3995,6 +3997,7 @@ name = "mdb-core"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "chrono",
  "futures-util",
  "libc",
  "libproc",

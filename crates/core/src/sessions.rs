@@ -1,12 +1,12 @@
 //! Claude Code sessions, from the files Claude Code and its desktop app keep on disk.
 //! These formats are internal and undocumented: read only, unknown fields ignored, missing files tolerated.
+use crate::desktop::DesktopSession;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -46,20 +46,6 @@ pub struct Activity {
     pub since: u64,
 }
 
-const DESKTOP_APP_PREFIX: &str = "Claude";
-
-/// Where desktop apps keep their data, per OS.
-fn app_data_dirs(home: &Path) -> Vec<PathBuf> {
-    if cfg!(target_os = "macos") {
-        vec![home.join("Library/Application Support")]
-    } else if cfg!(windows) {
-        // shortcut: not checked on a real Windows yet; the desktop app may keep its sessions elsewhere.
-        std::env::var_os("APPDATA").map(PathBuf::from).into_iter().collect()
-    } else {
-        vec![home.join(".config")]
-    }
-}
-
 fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
@@ -72,93 +58,26 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-fn strings(v: &Value, key: &str) -> Vec<String> {
-    v.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect()
-}
-
 /// The project a folder belongs to: its name, or the repository's for a worktree under `.claude/worktrees`.
 pub fn project_of(cwd: &str) -> String {
     let base = cwd.split("/.claude/worktrees/").next().unwrap_or(cwd).trim_end_matches(['/', '\\']);
     base.rsplit(['/', '\\']).next().unwrap_or(base).to_string()
 }
 
-/// Desktop app session files: every `local_<session id>.json` under each app's `claude-code-sessions` folder.
-fn desktop_files(home: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for data in app_data_dirs(home) {
-        for app in dir_entries(&data) {
-            let is_app = app.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(DESKTOP_APP_PREFIX));
-            if !is_app {
-                continue;
-            }
-            for a in dir_entries(&app.join("claude-code-sessions")) {
-                for b in dir_entries(&a) {
-                    for f in dir_entries(&b) {
-                        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                        if name.starts_with("local_") && name.ends_with(".json") {
-                            out.push(f);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
 const RECENT_MS: u64 = 2 * 86_400_000;
-/// What is kept of a desktop session file: they are large (they hold turn reports), and only these fields matter.
-const DESKTOP_KEYS: &[&str] = &[
-    "sessionId",
-    "cliSessionId",
-    "title",
-    "cwd",
-    "originCwd",
-    "isArchived",
-    "lastActivityAt",
-    "createdAt",
-    "worktreePath",
-    "writtenRepositories",
-    "folderWorktrees",
-    "shellFolders",
-];
 
-/// Reads the sessions on every sample without decoding everything each time: a desktop file is decoded again only
-/// when it changes, files idle for two days are skipped unless their session runs, transcripts are found once.
+/// Reads the live-session registry on every sample and joins it to the desktop sessions; transcripts are found once.
 #[derive(Default)]
 pub struct SessionReader {
-    desktop: HashMap<PathBuf, (Option<SystemTime>, u64, Value)>,
     transcripts: HashMap<String, PathBuf>,
 }
 
 impl SessionReader {
-    /// Every session that may be running: the live registry's, then recent desktop sessions it doesn't list
-    /// (their process can still be found by its folder and start time).
-    pub fn read(&mut self, home: &Path, now_ms: u64) -> Vec<SessionMeta> {
+    /// Every session that may be running: the live registry's, then desktop sessions active in the last two days
+    /// that it doesn't list (their process can still be found by its folder and start time).
+    pub fn read(&mut self, home: &Path, desktop: &[DesktopSession], now_ms: u64) -> Vec<SessionMeta> {
         let registry: Vec<Value> = dir_entries(&home.join(".claude/sessions")).filter_map(|f| read_json(&f)).collect();
-        let live: HashSet<String> = registry.iter().filter_map(|r| str_of(r, "hostSessionId")).collect();
-        let now = SystemTime::now();
-        let mut seen = HashSet::new();
-        for f in desktop_files(home) {
-            let Ok(md) = fs::metadata(&f) else { continue };
-            let modified = md.modified().ok();
-            let recent = modified.and_then(|m| now.duration_since(m).ok()).is_none_or(|age| age.as_millis() < u128::from(RECENT_MS));
-            let name = f.file_stem().and_then(|n| n.to_str()).unwrap_or_default();
-            if !recent && !live.contains(name) {
-                continue;
-            }
-            let unchanged = matches!(self.desktop.get(&f), Some((m, len, _)) if *m == modified && *len == md.len());
-            if !unchanged {
-                let Some(v) = read_json(&f) else { continue };
-                let small = DESKTOP_KEYS.iter().filter_map(|k| Some((k.to_string(), v.get(*k)?.clone()))).collect();
-                self.desktop.insert(f.clone(), (modified, md.len(), Value::Object(small)));
-            }
-            seen.insert(f);
-        }
-        self.desktop.retain(|f, _| seen.contains(f));
-        let desktop: Vec<&Value> = self.desktop.values().map(|(_, _, v)| v).collect();
-        let mut out = merge(&desktop, &registry, now_ms);
-
+        let mut out = merge(desktop, &registry, now_ms);
         let folders: Vec<PathBuf> = dir_entries(&home.join(".claude/projects")).collect();
         self.transcripts.retain(|_, p| p.is_file());
         for s in &mut out {
@@ -173,10 +92,10 @@ impl SessionReader {
     }
 }
 
-/// Registry entries with their desktop file, then the recent desktop sessions the registry doesn't list.
-fn merge(desktop: &[&Value], registry: &[Value], now_ms: u64) -> Vec<SessionMeta> {
-    let by_host = |id: &str| desktop.iter().copied().find(|d| d.get("sessionId").and_then(Value::as_str) == Some(id));
-    let by_cli = |id: &str| desktop.iter().copied().find(|d| d.get("cliSessionId").and_then(Value::as_str) == Some(id));
+/// Registry entries with their desktop session, then the recent desktop sessions the registry doesn't list.
+fn merge(desktop: &[DesktopSession], registry: &[Value], now_ms: u64) -> Vec<SessionMeta> {
+    let by_host = |id: &str| desktop.iter().find(|d| d.id == id);
+    let by_cli = |id: &str| desktop.iter().find(|d| d.cli.as_deref() == Some(id));
     let mut out: Vec<SessionMeta> = Vec::new();
 
     for r in registry {
@@ -186,22 +105,20 @@ fn merge(desktop: &[&Value], registry: &[Value], now_ms: u64) -> Vec<SessionMeta
         let mut s = meta(d, Some(r));
         s.id = id;
         s.pid = u32::try_from(pid).ok();
-        s.host_id = host_id.or_else(|| d.and_then(|d| str_of(d, "sessionId")));
+        s.host_id = host_id.or_else(|| d.map(|d| d.id.clone()));
         s.kind =
             if s.host_id.is_some() || str_of(r, "entrypoint").is_some_and(|e| e.contains("desktop")) { "desktop" } else { "cli" }.into();
         out.push(s);
     }
 
-    for d in desktop.iter().copied() {
-        let Some(id) = str_of(d, "cliSessionId") else { continue };
-        let recent = d.get("lastActivityAt").and_then(Value::as_u64).is_some_and(|t| now_ms.saturating_sub(t) < RECENT_MS);
-        let archived = d.get("isArchived").and_then(Value::as_bool).unwrap_or(false);
-        if !recent || archived || out.iter().any(|s| s.id == id) {
+    for d in desktop {
+        let Some(id) = d.cli.clone() else { continue };
+        if now_ms.saturating_sub(d.last_activity_at) >= RECENT_MS || d.archived || out.iter().any(|s| s.id == id) {
             continue;
         }
         let mut s = meta(Some(d), None);
         s.id = id;
-        s.host_id = str_of(d, "sessionId");
+        s.host_id = Some(d.id.clone());
         s.kind = "desktop".into();
         out.push(s);
     }
@@ -209,30 +126,20 @@ fn merge(desktop: &[&Value], registry: &[Value], now_ms: u64) -> Vec<SessionMeta
 }
 
 /// One session from its desktop file and its registry entry, either of which may be missing.
-fn meta(d: Option<&Value>, r: Option<&Value>) -> SessionMeta {
-    let get = |key: &str| d.and_then(|d| str_of(d, key));
-    let cwd = r.and_then(|r| str_of(r, "cwd")).or_else(|| get("cwd"));
-    let origin = get("originCwd").or_else(|| cwd.clone());
-    let mut dirs: Vec<String> = Vec::new();
-    if let Some(d) = d {
-        dirs.extend(str_of(d, "worktreePath"));
-        dirs.extend(strings(d, "writtenRepositories"));
-        for w in d.get("folderWorktrees").and_then(Value::as_array).into_iter().flatten() {
-            if !w.get("removed").and_then(Value::as_bool).unwrap_or(false) {
-                dirs.extend(str_of(w, "worktreePath"));
-            }
-        }
-    }
-    let title = r.and_then(|r| str_of(r, "name")).or_else(|| get("title"));
+fn meta(d: Option<&DesktopSession>, r: Option<&Value>) -> SessionMeta {
+    let cwd = r.and_then(|r| str_of(r, "cwd")).or_else(|| d.and_then(|d| d.cwd.clone()));
+    let origin = d.and_then(|d| d.origin_cwd.clone()).or_else(|| cwd.clone());
+    let dirs = d.map(|d| d.worktree.iter().chain(&d.written).chain(&d.folder_worktrees).cloned().collect()).unwrap_or_default();
+    let title = r.and_then(|r| str_of(r, "name")).or_else(|| d.map(|d| d.title.clone()).filter(|t| !t.is_empty()));
     let project = origin.as_deref().map(project_of).unwrap_or_default();
     SessionMeta {
         title: title.unwrap_or_else(|| format!("claude · {project}")),
         project,
         cwd,
         status: r.and_then(|r| str_of(r, "status")),
-        started_at: r.and_then(|r| r.get("startedAt")).or_else(|| d.and_then(|d| d.get("createdAt"))).and_then(Value::as_u64),
+        started_at: r.and_then(|r| r.get("startedAt")).and_then(Value::as_u64).or_else(|| d.map(|d| d.created_at).filter(|t| *t > 0)),
         dirs,
-        visited: d.map(|d| strings(d, "shellFolders")).unwrap_or_default(),
+        visited: d.map(|d| d.shell_folders.clone()).unwrap_or_default(),
         ..Default::default()
     }
 }

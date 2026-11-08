@@ -1,10 +1,14 @@
 //! What each AI coding agent session runs on this machine, and what it costs in RAM and CPU.
 //! Read-only: it lists processes, reads Claude Code's session files and asks the Docker engine; it changes nothing.
 pub mod attribute;
+pub mod desktop;
 pub mod docker;
+pub mod graph;
 pub mod host;
 pub mod sessions;
 pub mod text;
+pub mod transcripts;
+pub mod usage;
 
 pub use attribute::{Inputs, Report, attribute};
 
@@ -18,6 +22,7 @@ pub struct Monitor {
     host: host::HostSampler,
     docker: docker::DockerSampler,
     sessions: sessions::SessionReader,
+    desktop: desktop::DesktopStore,
     home: PathBuf,
     /// Transcript → (its size when read, what it showed): a transcript is read again only when it grows.
     activities: HashMap<PathBuf, (u64, Option<sessions::Activity>)>,
@@ -27,7 +32,14 @@ impl Default for Monitor {
     fn default() -> Self {
         #[allow(deprecated)] // fixed on every OS since Rust 1.85; the deprecation note lags behind
         let home = std::env::home_dir().unwrap_or_default();
-        Self { host: Default::default(), docker: Default::default(), sessions: Default::default(), home, activities: HashMap::new() }
+        Self {
+            host: Default::default(),
+            docker: Default::default(),
+            sessions: Default::default(),
+            desktop: Default::default(),
+            home,
+            activities: HashMap::new(),
+        }
     }
 }
 
@@ -37,7 +49,8 @@ impl Monitor {
         let host = self.host.host();
         let docker = self.docker.sample(&self.home).await;
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        let sessions = self.sessions.read(&self.home, at);
+        let desktop = self.desktop.refresh(&self.home);
+        let sessions = self.sessions.read(&self.home, &desktop, at);
 
         let mut activities = HashMap::new();
         let mut cache = HashMap::new();
