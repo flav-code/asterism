@@ -428,12 +428,12 @@ impl Render for TimelineView {
             } else {
                 self.zoom_at(k, at);
                 self.zoom = Some((to, at, now));
-                window.request_animation_frame();
+                crate::glide::again(window, cx);
             }
         }
         glide::trace("tlzoom", self.k);
         if !self.fresh.is_empty() {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
         }
         let (Some(g), Some(v)) = (self.graph.clone(), self.v.as_ref()) else {
             return div()

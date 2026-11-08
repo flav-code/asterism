@@ -589,14 +589,14 @@ impl Render for MapView {
             } else {
                 self.zoom_at(k, at);
                 self.zoom = Some((to, at, now));
-                window.request_animation_frame();
+                crate::glide::again(window, cx);
             }
         }
         glide::trace("zoom", self.k);
         if self.sim.running() {
             self.sim.tick();
             if self.sim.running() {
-                window.request_animation_frame();
+                crate::glide::again(window, cx);
             } else {
                 self.settle();
             }
@@ -604,7 +604,7 @@ impl Render for MapView {
         if self.fit_pending && (!self.sim.running() || self.sim.alpha < 0.5) {
             self.do_fit();
             if self.fit_pending {
-                window.request_animation_frame(); // the canvas has no size before its first frame
+                crate::glide::again(window, cx); // the canvas has no size before its first frame
             }
         }
         let Some(g) = self.graph.clone() else {
@@ -858,11 +858,11 @@ impl Render for MapView {
         }
         fades.end();
         if fades.moving {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
         }
         self.fades = fades;
         if !self.comets.is_empty() {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
         }
 
         let canvas_bounds = self.canvas.clone();

@@ -660,7 +660,7 @@ impl Render for DashView {
         crate::glide::trace("bars", bars_now.iter().flatten().sum::<f64>() as f32);
         crate::glide::trace("heat", heat_now.iter().sum::<f64>() as f32);
         if a.moving {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
         }
         let seg = |items: Vec<Stateful<Div>>| {
             div().flex().items_center().h(px(30.0)).p(px(2.0)).rounded(px(8.0)).bg(panel()).border_1().border_color(line()).children(items)
@@ -712,14 +712,6 @@ impl Render for DashView {
             .gap(px(10.0))
             .mb(px(14.0))
             .child(div().mr_auto().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).child("Token usage"))
-            .when(!u.ready, |h| {
-                h.child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(amber())
-                        .child(format!("Reading history… {} / {} transcripts", u.scanned, u.total)),
-                )
-            })
             .child(seg(ranges))
             .child(seg(metrics));
 

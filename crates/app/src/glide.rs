@@ -149,3 +149,12 @@ impl Fades {
         self.shown.retain(|_, v| v.1 == frame);
     }
 }
+
+/// Draws `cx`'s view again on the next frame. `Window::request_animation_frame` asks for the view being painted,
+/// which during `render` may be another one (the window's root): then the frame never comes and animations stall.
+pub fn again<V: 'static>(window: &Window, cx: &mut Context<V>) {
+    let view = cx.entity().downgrade();
+    window.on_next_frame(move |_, cx| {
+        view.update(cx, |_, cx| cx.notify()).ok();
+    });
+}

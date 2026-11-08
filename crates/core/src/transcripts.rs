@@ -153,6 +153,11 @@ pub struct Transcripts {
 }
 
 impl Transcripts {
+    /// Bytes read so far, over every file.
+    pub fn read_bytes(&self) -> u64 {
+        self.files.values().map(|t| t.offset).sum()
+    }
+
     /// Reads what was appended to `path` since the last call; None when the file is gone.
     pub fn scan(&mut self, path: &Path, usage: &mut Usage, now_ms: u64) -> Option<&Transcript> {
         let mut no_limit = u64::MAX;

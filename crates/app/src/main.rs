@@ -67,7 +67,7 @@ fn main() {
                     break;
                 }
                 // The history is read in steps right after launch, then the files are checked every 2 s.
-                std::thread::sleep(if usage.ready { SAMPLE_EVERY } else { Duration::from_millis(50) });
+                std::thread::sleep(if usage.ready { SAMPLE_EVERY } else { Duration::from_millis(16) });
             }
         })
         .expect("the sessions thread");
@@ -83,6 +83,15 @@ fn main() {
             titlebar: Some(TitlebarOptions { title: Some("my-dev-business".into()), ..Default::default() }),
             ..Default::default()
         };
+        // Snapshot runs float almost off-screen and take no focus: another window over them would stop their frames
+        // (macOS stops drawing hidden windows), and they stay out of the way of whoever uses the screen.
+        #[cfg(feature = "snapshot")]
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(point(px(48.) - bounds.size.width, bounds.origin.y), bounds.size))),
+            kind: WindowKind::PopUp,
+            focus: false,
+            ..options
+        };
         gpui_kit::open_window(options, cx, |window, cx| {
             let machine = cx.new(|cx| view::Machine::new(rx, window, cx));
             cx.new(|cx| shell::Shell::new(machine, grx, window, cx))
@@ -94,6 +103,7 @@ fn main() {
             }
         })
         .detach();
+        #[cfg(not(feature = "snapshot"))]
         cx.activate(true);
     });
 }

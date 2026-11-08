@@ -163,6 +163,9 @@ pub struct UsageView {
     pub ready: bool,
     pub scanned: usize,
     pub total: usize,
+    /// Bytes of transcripts read so far, of all there are: how far the first reading is.
+    pub read_bytes: u64,
+    pub total_bytes: u64,
     pub first: u64,
     pub biggest: Option<Biggest>,
     pub days: Vec<DayRow>,
@@ -335,6 +338,8 @@ pub struct Visualizer {
     /// The last map: who each transcript belongs to, for usage per session.
     cli_to_node: HashMap<String, String>,
     builds: u64,
+    /// The size of every transcript, measured until all were read once.
+    total_bytes: u64,
     titles: HashMap<String, (String, String, NodeKind)>,
 }
 
@@ -357,6 +362,7 @@ impl Visualizer {
         }
         if !self.ready {
             all.sort_by_cached_key(|f| std::cmp::Reverse(modified_ms(f)));
+            self.total_bytes = all.iter().map(|f| fs::metadata(f).map_or(0, |m| m.len())).sum();
         }
         self.all = all;
     }
@@ -678,6 +684,8 @@ impl Visualizer {
             ready: self.ready,
             scanned: self.scanned,
             total: self.all.len(),
+            read_bytes: if self.ready { self.total_bytes } else { self.transcripts.read_bytes().min(self.total_bytes) },
+            total_bytes: self.total_bytes,
             first: u.first,
             biggest: u.biggest.clone(),
             days,

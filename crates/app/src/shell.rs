@@ -98,6 +98,10 @@ pub struct Shell {
     panel_open: bool,
     panel_w: f32,
     panel_last: Instant,
+    /// The history loader: how full its bar is on screen, how visible it is (it fades out once done), its last frame.
+    load_fill: f32,
+    load_alpha: f32,
+    load_last: Instant,
     feed: Vec<FeedEvent>,
     feed_seq: u64,
     feed_open: bool,
@@ -188,6 +192,9 @@ impl Shell {
             panel_open: saved.panel,
             panel_w: if saved.panel { panel::WIDTH } else { 0.0 },
             panel_last: Instant::now(),
+            load_fill: 0.0,
+            load_alpha: 1.0,
+            load_last: Instant::now(),
             feed: Vec::new(),
             feed_seq: 0,
             feed_open: saved.feed,
@@ -357,7 +364,7 @@ impl Shell {
         if done {
             self.replay = None;
         } else {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
         }
     }
 
@@ -535,6 +542,7 @@ impl Shell {
         let replaying = self.replay.is_some();
         // The tabs come first and never move; the window's title already names the app.
         div()
+            .relative()
             .flex()
             .items_center()
             .gap(px(12.0))
@@ -543,6 +551,7 @@ impl Shell {
             .border_b_1()
             .border_color(line())
             .child(seg(tabs))
+            .children(self.loader(wide))
             .children(stats.filter(|_| map_tab))
             .child(div().flex_1())
             .when(map_tab, |d| {
@@ -567,6 +576,46 @@ impl Shell {
                         },
                     )))
             })
+    }
+
+    /// While the history is read after launch: how far it is, in the free room right of the tabs (laid over the bar,
+    /// so nothing moves when it goes). The bar fills smoothly and the whole fades out once everything is read.
+    fn loader(&self, wide: bool) -> Option<Div> {
+        let u = self.usage.as_ref()?;
+        if self.load_alpha <= 0.01 {
+            return None;
+        }
+        let label = if u.ready { "History read".to_string() } else { "Reading history".to_string() };
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(if wide { 560.0 } else { 276.0 }))
+                .flex()
+                .items_center()
+                .opacity(self.load_alpha)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.0))
+                        .w(px(156.0))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .text_size(px(11.0))
+                                .child(div().text_color(muted()).child(label))
+                                .child(div().font_family(MONO).text_color(faint()).child(format!("{:.0}%", self.load_fill * 100.0))),
+                        )
+                        .child(
+                            div().h(px(3.0)).w_full().rounded(px(2.0)).bg(rgba(0xffffff1a)).child(
+                                div().h_full().rounded(px(2.0)).w(relative(self.load_fill)).bg(if u.ready { green() } else { blue() }),
+                            ),
+                        ),
+                ),
+        )
     }
 
     /// The live feed, at the bottom left of the map: the newest line slides in at the top.
@@ -786,7 +835,7 @@ impl Shell {
             eprintln!("snapshot ready={ready} usage={:?}", self.usage.as_ref().map(|u| (u.ready, u.scanned, u.total)));
         }
         if self.snapshot_taken || !ready {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
             return;
         }
         self.snapshot_taken = true;
@@ -801,7 +850,7 @@ impl Shell {
             }
             cx.quit();
         });
-        window.request_animation_frame(); // the frame that saves it, even if nothing moves
+        crate::glide::again(window, cx); // the frame that saves it, even if nothing moves
     }
 }
 
@@ -831,7 +880,7 @@ impl Shell {
             Tab::Timeline => self.graph.is_some(),
         };
         if self.snapshot_taken || !ready {
-            window.request_animation_frame();
+            crate::glide::again(window, cx);
             return;
         }
         self.snapshot_taken = true;
@@ -974,7 +1023,21 @@ impl Render for Shell {
             if (self.panel_w - target).abs() < 0.5 {
                 self.panel_w = target;
             } else {
-                window.request_animation_frame();
+                crate::glide::again(window, cx);
+            }
+        }
+        // The loader's bar slides to the share of history read; once all is read it fades out.
+        if let Some(u) = self.usage.clone() {
+            let now = Instant::now();
+            let dt = (now - self.load_last).as_secs_f32();
+            self.load_last = now;
+            let target = if u.total_bytes == 0 { 0.0 } else { u.read_bytes as f32 / u.total_bytes as f32 };
+            self.load_fill = crate::glide::ease(self.load_fill, if u.ready { 1.0 } else { target }, dt * 0.5);
+            if u.ready && (1.0 - self.load_fill) < 0.01 {
+                self.load_alpha = crate::glide::ease(self.load_alpha, 0.0, dt * 0.25);
+            }
+            if self.load_alpha > 0.01 && (self.load_fill < 0.999 || u.ready) {
+                crate::glide::again(window, cx);
             }
         }
         let map_tab = matches!(self.tab, Tab::Map | Tab::Timeline);
