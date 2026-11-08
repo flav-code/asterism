@@ -9,6 +9,12 @@ When a dozen agent sessions run at once, the machine slows down and the OS can't
 shows one big "VM Helper" and twenty identical `claude` processes. Asterism puts every process and container
 back under the session that started it, and draws the sessions as a map: who started whom, who messaged whom.
 
+![The map: sessions as bubbles, lines for who started or messaged whom](docs/map.png)
+
+![The timeline: one row per session over the last 24 hours](docs/timeline.png)
+
+The screenshots come from demo mode: real sessions, with every title, project and message replaced by made-up ones.
+
 **Status:** early. Works on macOS; Windows builds but is not tested yet.
 
 ## Install

@@ -657,6 +657,10 @@ impl Shell {
     /// so nothing moves when it goes). The bar fills smoothly and the whole fades out once everything is read.
     fn loader(&self, wide: bool) -> Option<Div> {
         let u = self.usage.as_ref()?;
+        #[cfg(feature = "snapshot")]
+        if crate::demo::on() {
+            return None; // screenshots show the app at rest
+        }
         if self.load_alpha <= 0.01 {
             return None;
         }

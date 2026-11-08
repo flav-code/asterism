@@ -165,7 +165,13 @@ impl MapView {
             mouse: Point::default(),
             drag: None,
             selected: None,
-            titles: match cx.global::<Settings>().titles.as_str() {
+            // Snapshot builds can pick the titles with MDB_TITLES (hover, open, all).
+            titles: match std::env::var("MDB_TITLES")
+                .ok()
+                .filter(|_| cfg!(feature = "snapshot"))
+                .as_deref()
+                .unwrap_or(&cx.global::<Settings>().titles)
+            {
                 "open" => Titles::Open,
                 "all" => Titles::All,
                 _ => Titles::Hover,
