@@ -62,3 +62,9 @@ like a secret (tokens, keys, passwords, `Authorization` headers, credentials in 
 - `crates/cli`: the `asterism-cli` command.
 - `crates/app`: the app (tabs Map, Timeline, Usage, Machine), built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
   Sampling runs on its own thread; the window only reads the latest report.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Asterism is not affiliated with Anthropic; it only reads the files Claude Code keeps on
+your machine.
+
