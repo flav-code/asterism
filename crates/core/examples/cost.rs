@@ -1,5 +1,5 @@
-//! Where a sample's time goes: `cargo run --release -p mdb-core --example cost`.
-use mdb_core::{desktop::DesktopStore, docker::DockerSampler, host::HostSampler, sessions};
+//! Where a sample's time goes: `cargo run --release -p asterism-core --example cost`.
+use asterism_core::{desktop::DesktopStore, docker::DockerSampler, host::HostSampler, sessions};
 use std::time::Instant;
 
 #[tokio::main(flavor = "current_thread")]

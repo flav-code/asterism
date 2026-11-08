@@ -1,8 +1,8 @@
 //! What the views share: the filters, and which sessions, links and messages they let through.
 use crate::ui::*;
+use asterism_core::graph::{Graph, Node, NodeKind};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::{Graph, Node, NodeKind};
 use std::collections::{HashMap, HashSet};
 
 pub const PALETTE: [u32; 8] = [0x7c9cff, 0xff9f6b, 0xe879f9, 0xa3e635, 0x2dd4bf, 0xfacc15, 0xfda4af, 0x93c5fd];

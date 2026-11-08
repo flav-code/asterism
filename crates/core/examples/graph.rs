@@ -1,5 +1,5 @@
-//! The map and usage on this machine, to compare with other tools: `cargo run --release -p mdb-core --example graph`.
-use mdb_core::{desktop::DesktopStore, graph::Visualizer};
+//! The map and usage on this machine, to compare with other tools: `cargo run --release -p asterism-core --example graph`.
+use asterism_core::{desktop::DesktopStore, graph::Visualizer};
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

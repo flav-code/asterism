@@ -5,10 +5,10 @@ use crate::glide::{self, Glide};
 use crate::state::{Filters, Visible, is_session, node_tip, project_colors, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
+use asterism_core::graph::{EdgeKind, Graph, MsgKind, NodeKind};
 use chrono::{Datelike, Duration as Days, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::{EdgeKind, Graph, MsgKind, NodeKind};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;

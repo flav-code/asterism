@@ -1,12 +1,12 @@
 [package]
-name = "mdb"
-description = "Command line for mdb-core: who uses the RAM and CPU right now."
+name = "asterism-cli"
+description = "Command line for Asterism: who uses the RAM and CPU right now."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-mdb-core = { path = "../core" }
+asterism-core = { path = "../core" }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "macros", "time"] }

@@ -1,5 +1,5 @@
 [package]
-name = "mdb-core"
+name = "asterism-core"
 description = "Finds what each AI coding agent session runs on this machine, and what it costs."
 version.workspace = true
 edition.workspace = true

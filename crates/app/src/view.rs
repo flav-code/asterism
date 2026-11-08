@@ -3,12 +3,12 @@ use crate::glide::Glide;
 use crate::icons;
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
+use asterism_core::Report;
+use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionView};
+use asterism_core::host::Pressure;
 use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::Report;
-use mdb_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionView};
-use mdb_core::host::Pressure;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;

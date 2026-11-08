@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>
+  <linearGradient id="xbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1f33"/><stop offset="1" stop-color="#090a12"/></linearGradient>
+  <linearGradient id="xrim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".5" stop-color="#fff" stop-opacity=".04"/><stop offset="1" stop-color="#fff" stop-opacity=".1"/></linearGradient>
+  <filter id="xsh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".35"/></filter>
+  <filter id="xglow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="16"/></filter>
+  <radialGradient id="xblue" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#c4ecff"/><stop offset=".5" stop-color="#38bdf8"/><stop offset="1" stop-color="#1769a8"/></radialGradient><radialGradient id="xviolet" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#e7e0ff"/><stop offset=".5" stop-color="#a78bfa"/><stop offset="1" stop-color="#5b3fc4"/></radialGradient><radialGradient id="xgreen" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#dcffe9"/><stop offset=".5" stop-color="#4ade80"/><stop offset="1" stop-color="#15803d"/></radialGradient><radialGradient id="xamber" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#fff4c7"/><stop offset=".5" stop-color="#fbbf24"/><stop offset="1" stop-color="#b45309"/></radialGradient><radialGradient id="xpink" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#ffe0f0"/><stop offset=".5" stop-color="#f472b6"/><stop offset="1" stop-color="#a31a63"/></radialGradient>
+  <linearGradient id="xbv" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#a78bfa"/></linearGradient>
+  <linearGradient id="xgar" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4ade80"/><stop offset=".55" stop-color="#fbbf24"/><stop offset="1" stop-color="#f87171"/></linearGradient>
+  <linearGradient id="xsweep" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4ade80" stop-opacity="0"/><stop offset="1" stop-color="#4ade80" stop-opacity=".55"/></linearGradient>
+  <linearGradient id="xl1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a3150"/><stop offset="1" stop-color="#1b2036"/></linearGradient>
+  <linearGradient id="xl2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34407a"/><stop offset="1" stop-color="#232b55"/></linearGradient>
+  <linearGradient id="xl3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#8b6cf6"/></linearGradient></defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#xbg)" filter="url(#xsh)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="185" fill="none" stroke="url(#xrim)" stroke-width="3"/><g fill="none" stroke-linecap="round">
+      <path d="M440 560 Q 530 420 660 360" stroke="#38bdf8" stroke-opacity=".75" stroke-width="22"/>
+      <path d="M440 560 Q 570 610 700 650" stroke="#4ade80" stroke-opacity=".75" stroke-width="22"/>
+      <path d="M440 560 Q 340 470 340 350" stroke="#a78bfa" stroke-opacity=".8" stroke-width="18"/></g>
+      <circle cx="440" cy="560" r="168" fill="#38bdf8" opacity=".28" filter="url(#xglow)"/><circle cx="440" cy="560" r="112" fill="url(#xblue)"/><circle cx="660" cy="360" r="62" fill="url(#xviolet)"/><circle cx="700" cy="650" r="72" fill="url(#xgreen)"/><circle cx="340" cy="330" r="46" fill="url(#xamber)"/>
+      <circle cx="340" cy="330" r="76" fill="none" stroke="#fbbf24" stroke-width="12" stroke-dasharray="22 18" stroke-linecap="round"/></svg>

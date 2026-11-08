@@ -4,9 +4,9 @@ use crate::glide::Glide;
 use crate::state::{Filters, is_session, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
+use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

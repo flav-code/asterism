@@ -289,6 +289,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "asterism"
+version = "0.1.0"
+dependencies = [
+ "asterism-core",
+ "chrono",
+ "gpui-kit",
+ "gpui-pre-platform",
+ "serde_json",
+ "sysinfo 0.40.1",
+ "tokio",
+]
+
+[[package]]
+name = "asterism-cli"
+version = "0.1.0"
+dependencies = [
+ "asterism-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "asterism-core"
+version = "0.1.0"
+dependencies = [
+ "bollard",
+ "chrono",
+ "futures-util",
+ "libc",
+ "libproc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo 0.40.1",
+ "tokio",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3969,44 +4007,6 @@ checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
  "digest 0.10.7",
-]
-
-[[package]]
-name = "mdb"
-version = "0.1.0"
-dependencies = [
- "mdb-core",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "mdb-app"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "gpui-kit",
- "gpui-pre-platform",
- "mdb-core",
- "serde_json",
- "sysinfo 0.40.1",
- "tokio",
-]
-
-[[package]]
-name = "mdb-core"
-version = "0.1.0"
-dependencies = [
- "bollard",
- "chrono",
- "futures-util",
- "libc",
- "libproc",
- "regex",
- "serde",
- "serde_json",
- "sysinfo 0.40.1",
- "tokio",
 ]
 
 [[package]]

@@ -15,10 +15,10 @@ mod timeline;
 mod ui;
 mod view;
 
+use asterism_core::desktop::DesktopStore;
+use asterism_core::graph::{UsageView, Visualizer};
+use asterism_core::{Monitor, Report};
 use gpui_kit::*;
-use mdb_core::desktop::DesktopStore;
-use mdb_core::graph::{UsageView, Visualizer};
-use mdb_core::{Monitor, Report};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,13 +75,15 @@ fn main() {
 
     gpui_kit::application().with_assets(icons::Icons).run(move |cx| {
         gpui_kit::init(cx);
+        #[cfg(not(feature = "snapshot"))]
+        settings::move_old_data();
         cx.set_global(settings::Settings::load());
         // The inputs and other components follow the window's dark palette, not the system's light one.
         gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
         let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions { title: Some("my-dev-business".into()), ..Default::default() }),
+            titlebar: Some(TitlebarOptions { title: Some("Asterism".into()), ..Default::default() }),
             ..Default::default()
         };
         // Snapshot runs float almost off-screen and take no focus: another window over them would stop their frames

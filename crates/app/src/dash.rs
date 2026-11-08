@@ -4,10 +4,10 @@ use crate::glide::Glide;
 use crate::settings::{self, Settings};
 use crate::ui::blue; // over gpui's color of the same name
 use crate::ui::*;
+use asterism_core::graph::UsageView;
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::UsageView;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -56,7 +56,7 @@ impl Metric {
             Metric::Replies => "Replies",
         }
     }
-    fn of(self, t: &mdb_core::usage::Totals) -> f64 {
+    fn of(self, t: &asterism_core::usage::Totals) -> f64 {
         match self {
             Metric::Usd => t.usd,
             Metric::Out => t.o as f64,
@@ -184,7 +184,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     };
     let start_key = day_key(start);
     let days: Vec<_> = u.days.iter().filter(|d| d.d >= start_key).collect();
-    let sum = |f: &dyn Fn(&&mdb_core::graph::DayRow) -> f64| days.iter().map(f).sum::<f64>();
+    let sum = |f: &dyn Fn(&&asterism_core::graph::DayRow) -> f64| days.iter().map(f).sum::<f64>();
     let tot_usd = sum(&|d| d.t.usd);
     let (i, o, cr, cw) = (sum(&|d| d.t.i as f64), sum(&|d| d.t.o as f64), sum(&|d| d.t.cr as f64), sum(&|d| d.t.cw as f64));
     let all = i + o + cr + cw;
@@ -261,7 +261,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     }
 
     let minute = now.timestamp_millis() as u64 / 60_000 * 60_000;
-    let by_minute: HashMap<u64, &mdb_core::usage::Totals> = u.minutes.iter().map(|(m, t)| (*m, t)).collect();
+    let by_minute: HashMap<u64, &asterism_core::usage::Totals> = u.minutes.iter().map(|(m, t)| (*m, t)).collect();
     let live = (0..120)
         .map(|i| {
             let t = minute - (119 - i) * 60_000;

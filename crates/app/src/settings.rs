@@ -41,11 +41,21 @@ pub fn data_dir() -> PathBuf {
     #[allow(deprecated)]
     let home = std::env::home_dir().unwrap_or_default();
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/my-dev-business")
+        home.join("Library/Application Support/Asterism")
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map_or(home.clone(), PathBuf::from).join("my-dev-business")
+        std::env::var_os("APPDATA").map_or(home.clone(), PathBuf::from).join("Asterism")
     } else {
-        home.join(".config/my-dev-business")
+        home.join(".config/asterism")
+    }
+}
+
+/// The app was called my-dev-business: its settings and saved map move to the new folder once.
+#[cfg(not(feature = "snapshot"))]
+pub fn move_old_data() {
+    let new = data_dir();
+    let old = new.with_file_name("my-dev-business");
+    if !new.exists() && old.is_dir() {
+        std::fs::rename(&old, &new).ok();
     }
 }
 

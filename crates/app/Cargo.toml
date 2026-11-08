@@ -1,6 +1,6 @@
 [package]
-name = "mdb-app"
-description = "Desktop window for mdb-core."
+name = "asterism"
+description = "Asterism: what every AI coding agent session on this machine runs, says and costs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 gpui-kit = "0.9.0"
-mdb-core = { path = "../core" }
+asterism-core = { path = "../core" }
 tokio = { version = "1.54.1", features = ["rt", "time", "sync", "net"] }
 # Only for `--features snapshot`: GPUI renders the window into a PNG itself, no screen-recording permission needed.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", optional = true, features = ["test-support"] }

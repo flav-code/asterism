@@ -1,30 +1,30 @@
-# my-dev-business (working name)
+<p align="center"><img src="crates/app/assets/icon-512.png" width="128" alt=""></p>
 
-See what each AI coding agent session runs on your machine, and what it costs in RAM and CPU.
+# Asterism
+
+See every AI coding agent session on your machine at once: how they talk to each other, what each one is doing,
+what it costs in tokens, and what it runs in RAM and CPU.
 
 When a dozen agent sessions run at once, the machine slows down and the OS can't tell you why: Activity Monitor
-shows one big "VM Helper" and twenty identical `claude` processes. This tool puts every process and container
-back under the session that started it: its commands, builds, test runners, Docker containers and local
-Kubernetes clusters, and what the session is doing right now.
+shows one big "VM Helper" and twenty identical `claude` processes. Asterism puts every process and container
+back under the session that started it, and draws the sessions as a map: who started whom, who messaged whom.
 
-**Status:** early. The detection core, a command line and a first desktop window (GPUI) work on macOS.
-Windows comes next.
+**Status:** early. Works on macOS; Windows builds but is not tested yet.
 
 ## Try it
 
 ```sh
-cargo run -p mdb-app             # the window, updated every 2 s
-cargo run -p mdb -- top          # a summary in the terminal
-cargo run -p mdb -- top --json   # everything, as JSON
+cargo run --release -p asterism            # the app
+cargo run -p asterism-cli -- top           # a summary in the terminal
+cargo run -p asterism-cli -- top --json    # everything, as JSON
+scripts/package-macos.sh                   # Asterism.app and a .dmg in dist/
 ```
 
 To save the window as a PNG without screen-recording permission (GPUI renders the frame itself):
 
 ```sh
-MDB_SNAPSHOT=window.png cargo run -p mdb-app --features snapshot
+MDB_SNAPSHOT=window.png MDB_TAB=map cargo run --release -p asterism --features snapshot
 ```
-
-`MDB_SNAPSHOT_OPEN=1` opens the biggest session first.
 
 It shows:
 
@@ -59,6 +59,6 @@ like a secret (tokens, keys, passwords, `Authorization` headers, credentials in 
 ## Layout
 
 - `crates/core`: the detection, with no UI dependency. Tests run on recorded data (`tests/fixtures`).
-- `crates/cli`: the `mdb` command.
-- `crates/app`: the window, built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
+- `crates/cli`: the `asterism-cli` command.
+- `crates/app`: the app (tabs Map, Timeline, Usage, Machine), built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
   Sampling runs on its own thread; the window only reads the latest report.

@@ -22,7 +22,7 @@ jobs:
     env:
       # The window (GPUI) is built on Windows only: macOS minutes cost ten times more on a private repository
       # and it is checked on a Mac before each push; Linux would need GPUI's system libraries.
-      SCOPE: ${{ matrix.os == 'windows-latest' && '--workspace' || '--workspace --exclude mdb-app' }}
+      SCOPE: ${{ matrix.os == 'windows-latest' && '--workspace' || '--workspace --exclude asterism' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

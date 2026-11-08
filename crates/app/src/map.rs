@@ -6,9 +6,9 @@ use crate::settings::{self, Settings, data_dir};
 use crate::state::{Filters, is_session, node_tip, project_colors, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
+use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};

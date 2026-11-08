@@ -9,10 +9,10 @@ use crate::timeline::{TimelineEvent, TimelineView};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use crate::view::Machine;
+use asterism_core::graph::{Graph, Msg, MsgKind, NodeKind, UsageView};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mdb_core::graph::{Graph, Msg, MsgKind, NodeKind, UsageView};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -299,7 +299,7 @@ impl Shell {
     /// What changed since the last data: sessions starting or finishing work, new sessions and subagents, messages.
     /// Only what just happened: the history read after launch is not news.
     fn news(&mut self, old: &Graph, new: &Graph) {
-        let before: HashMap<&str, &mdb_core::graph::Node> = old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let before: HashMap<&str, &asterism_core::graph::Node> = old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let now = now_ms();
         let recent = |ts: u64| now.saturating_sub(ts) < 120_000;
         for n in &new.nodes {

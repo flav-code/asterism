@@ -1,9 +1,9 @@
 //! Attribution on recorded data: a process table, `docker inspect` output and session files, as plain JSON.
-use mdb_core::attribute::{Claim, Group, OwnerKind, attach, attribute, group_containers};
-use mdb_core::docker::{Container, DockerInfo, summarize};
-use mdb_core::host::{Host, Proc};
-use mdb_core::sessions::{Activity, SessionMeta};
-use mdb_core::{Inputs, Report};
+use asterism_core::attribute::{Claim, Group, OwnerKind, attach, attribute, group_containers};
+use asterism_core::docker::{Container, DockerInfo, summarize};
+use asterism_core::host::{Host, Proc};
+use asterism_core::sessions::{Activity, SessionMeta};
+use asterism_core::{Inputs, Report};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

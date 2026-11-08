@@ -1,6 +1,6 @@
 //! `mdb top [--json]`: who uses the RAM and CPU right now, by agent session, Docker and app.
-use mdb_core::Monitor;
-use mdb_core::attribute::{OwnerKind, Report};
+use asterism_core::Monitor;
+use asterism_core::attribute::{OwnerKind, Report};
 use std::time::Duration;
 
 #[tokio::main(flavor = "current_thread")]
