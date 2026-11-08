@@ -3,6 +3,7 @@
 //! keeps); the window only ever reads their latest result.
 mod dash;
 mod glide;
+mod icons;
 mod layout;
 mod map;
 mod panel;
@@ -71,7 +72,7 @@ fn main() {
         })
         .expect("the sessions thread");
 
-    gpui_kit::application().run(move |cx| {
+    gpui_kit::application().with_assets(icons::Icons).run(move |cx| {
         gpui_kit::init(cx);
         cx.set_global(settings::Settings::load());
         // The inputs and other components follow the window's dark palette, not the system's light one.

@@ -72,6 +72,9 @@ pub struct Owner {
     pub cpu: f32,
     pub mem: u64,
     pub procs: usize,
+    /// An app's bundle (`/Applications/X.app`), for its icon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -317,11 +320,12 @@ enum Own {
     Other(String),
 }
 
-/// The app a process belongs to: the first `.app` bundle in its path (macOS).
-fn bundle_of(p: &Proc) -> Option<String> {
+/// The app a process belongs to: the first `.app` bundle in its path (macOS), by name and by path.
+fn bundle_of(p: &Proc) -> Option<(String, String)> {
     let path = if p.exe.is_empty() { &p.cmd } else { &p.exe };
-    let head = &path[..path.find(".app/")?];
-    head.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).map(str::to_string)
+    let end = path.find(".app/")?;
+    let name = path[..end].rsplit(['/', '\\']).next().filter(|n| !n.is_empty())?;
+    Some((name.to_string(), path[..end + 4].to_string()))
 }
 
 fn is_system(p: &Proc) -> bool {
@@ -467,6 +471,7 @@ pub fn attribute(inp: Inputs) -> Report {
     for p in inp.procs.iter().filter(|p| is_vm(p)) {
         claim_tree(p.pid, Own::Docker, &mut owner);
     }
+    let mut bundles: HashMap<String, String> = HashMap::new();
     for p in inp.procs {
         if owner.contains_key(&p.pid) {
             continue;
@@ -478,8 +483,9 @@ pub fn attribute(inp: Inputs) -> Report {
             if x.pid <= 1 {
                 break;
             }
-            if let Some(b) = bundle_of(x) {
-                app = Some(b);
+            if let Some((name, path)) = bundle_of(x) {
+                bundles.entry(name.clone()).or_insert(path);
+                app = Some(name);
                 break;
             }
             q = (x.ppid != x.pid).then(|| by_pid.get(&x.ppid).copied()).flatten();
@@ -669,6 +675,7 @@ pub fn attribute(inp: Inputs) -> Report {
                     cpu: cpu + s.docker_cpu,
                     mem: mem + s.docker_mem,
                     procs: n,
+                    bundle: None,
                 });
                 continue;
             }
@@ -677,7 +684,8 @@ pub fn attribute(inp: Inputs) -> Report {
             Own::Other(name) => (OwnerKind::Other, name, None),
             Own::Docker => unreachable!("removed above"),
         };
-        owners.push(Owner { kind, name, session, cpu, mem, procs: n });
+        let bundle = (kind == OwnerKind::App).then(|| bundles.get(&name).cloned()).flatten();
+        owners.push(Owner { kind, name, session, cpu, mem, procs: n, bundle });
     }
     let docker_name = inp.docker.as_ref().map(|d| d.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Docker".into());
     if vm_mem > 0 || !containers.is_empty() {
@@ -688,7 +696,7 @@ pub fn attribute(inp: Inputs) -> Report {
             (containers.iter().map(|c| c.cpu).sum::<f32>() - attached_cpu, containers.iter().map(|c| c.mem).sum::<u64>() - attached_mem)
         };
         let name = if vm_mem > 0 { format!("{docker_name} VM") } else { docker_name.clone() };
-        owners.push(Owner { kind: OwnerKind::Docker, name, session: None, cpu, mem, procs: 0 });
+        owners.push(Owner { kind: OwnerKind::Docker, name, session: None, cpu, mem, procs: 0, bundle: None });
     }
     owners.retain(|o| o.mem > 0 || o.cpu > 0.0);
     owners.sort_by(|a, b| b.mem.cmp(&a.mem).then(b.cpu.total_cmp(&a.cpu)));

@@ -1,7 +1,9 @@
 //! The Machine tab: the machine at the top, who uses it on the left, the agent sessions on the right.
 use crate::glide::Glide;
+use crate::icons;
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
+use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mdb_core::Report;
@@ -26,6 +28,10 @@ fn unfold() -> Duration {
 
 pub struct Machine {
     report: Option<Arc<Report>>,
+    /// The report before: each number shows if it went up or down since.
+    prev: Option<Arc<Report>>,
+    /// App icons by bundle path; None while loading or when there is none.
+    icons: HashMap<String, Option<Arc<Image>>>,
     expanded: HashSet<String>,
     /// Sessions whose details are still shrinking after a click closed them.
     closing: HashSet<String>,
@@ -45,6 +51,7 @@ impl Machine {
             while rx.changed().await.is_ok() {
                 let report = rx.borrow_and_update().clone();
                 let updated = this.update(cx, |m, cx| {
+                    m.prev = m.report.take();
                     m.report = report;
                     cx.notify();
                 });
@@ -55,6 +62,8 @@ impl Machine {
         });
         Self {
             report: None,
+            prev: None,
+            icons: HashMap::new(),
             expanded: HashSet::new(),
             closing: HashSet::new(),
             clicks: HashMap::new(),
@@ -93,6 +102,26 @@ impl Machine {
             self.expanded.insert(id.to_string());
         }
         cx.notify();
+    }
+
+    /// Starts reading the icon of every app on screen that has none yet, away from the window's thread.
+    fn load_icons(&mut self, r: &Report, cx: &mut Context<Self>) {
+        for b in r.owners.iter().filter_map(|o| o.bundle.clone()) {
+            if self.icons.contains_key(&b) {
+                continue;
+            }
+            self.icons.insert(b.clone(), None);
+            cx.spawn(async move |this, cx| {
+                let path = b.clone();
+                let png = cx.background_executor().spawn(async move { icons::app_icon_png(&path) }).await;
+                this.update(cx, |m, cx| {
+                    m.icons.insert(b, png.map(|p| Arc::new(Image::from_bytes(ImageFormat::Png, p))));
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     fn header(&self, r: &Report, cx: &mut Context<Self>) -> Div {
@@ -141,6 +170,11 @@ impl Machine {
     fn machine(&self, r: &Report) -> Div {
         let m = &r.host.memory;
         let tile = |label: &str| {
+            let icon = match label {
+                "Memory" | "Memory pressure" | "Swap" => Some(IconName::MemoryStick),
+                "CPU" => Some(IconName::Cpu),
+                _ => None,
+            };
             div()
                 .flex()
                 .flex_col()
@@ -152,8 +186,17 @@ impl Machine {
                 .bg(panel())
                 .border_1()
                 .border_color(line())
-                .child(caption(label.to_uppercase()))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .children(icon.map(|i| icons::line(i, faint(), 12.)))
+                        .child(caption(label.to_uppercase())),
+                )
         };
+        let p = self.prev.as_ref().map(|p| &p.host);
+        let with_trend = |big: Div, t: Trend, key: &str| div().flex().items_center().gap(px(6.)).child(big).child(trend_mark(t, key, r.at));
         let big = |s: String| div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(text()).child(s);
         let sub = |s: String| div().text_size(px(12.)).text_color(muted()).truncate().child(s);
 
@@ -175,25 +218,43 @@ impl Machine {
                     .child(div().flex().items_center().gap(px(8.)).child(dot(pressure_color).size(px(10.))).child(big(pressure.into())))
                     .child(sub(format!("{} compressed", m.compressed.map_or("—".into(), bytes)))),
             )
-            .child(tile("Memory").child(big(format!("{} of {}", bytes(m.used), bytes(m.total)))).child(bar(
-                used,
-                if used > 0.9 {
-                    red()
-                } else if used > 0.75 {
-                    amber()
-                } else {
-                    blue()
-                },
-            )))
-            .child(tile("Swap").child(big(format!("{} of {}", bytes(m.swap_used), bytes(m.swap_total)))).child(sub(
-                match (m.swap_in, m.swap_out) {
-                    (Some(i), Some(o)) => format!("in {} · out {}", rate(i), rate(o)),
-                    _ => "—".into(),
-                },
-            )))
+            .child(
+                tile("Memory")
+                    .child(with_trend(
+                        big(format!("{} of {}", bytes(m.used), bytes(m.total))),
+                        mem_trend(m.used, p.map(|h| h.memory.used)),
+                        "t-mem",
+                    ))
+                    .child(bar(
+                        used,
+                        if used > 0.9 {
+                            red()
+                        } else if used > 0.75 {
+                            amber()
+                        } else {
+                            blue()
+                        },
+                    )),
+            )
+            .child(
+                tile("Swap")
+                    .child(with_trend(
+                        big(format!("{} of {}", bytes(m.swap_used), bytes(m.swap_total))),
+                        mem_trend(m.swap_used, p.map(|h| h.memory.swap_used)),
+                        "t-swap",
+                    ))
+                    .child(sub(match (m.swap_in, m.swap_out) {
+                        (Some(i), Some(o)) => format!("in {} · out {}", rate(i), rate(o)),
+                        _ => "—".into(),
+                    })),
+            )
             .child(
                 tile("CPU")
-                    .child(big(format!("{} of {} cores", cpu(r.host.cpu), r.host.ncpu)))
+                    .child(with_trend(
+                        big(format!("{} of {} cores", cpu(r.host.cpu), r.host.ncpu)),
+                        cpu_trend(r.host.cpu, p.map(|h| h.cpu)),
+                        "t-cpu",
+                    ))
                     .child(bar(r.host.cpu / cores, if r.host.cpu / cores > 0.85 { red() } else { blue() })),
             );
         if let Some(d) = &r.docker {
@@ -238,6 +299,9 @@ impl Machine {
             .pb(px(16.))
             .child(div().pb(px(8.)).child(caption("WHO USES IT")))
             .children(owners.into_iter().take(30).map(|o| {
+                let before = self.prev.as_ref().and_then(|p| p.owners.iter().find(|x| x.kind == o.kind && x.name == o.name));
+                let icon = o.bundle.as_ref().and_then(|b| self.icons.get(b).cloned().flatten());
+                let key = format!("o-{}", o.name);
                 div()
                     .flex()
                     .flex_col()
@@ -248,16 +312,24 @@ impl Machine {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(dot(kind_color(o.kind)))
+                            .child(match icon {
+                                Some(i) => img(i).flex_none().size(px(16.)).into_any_element(),
+                                None => {
+                                    div().w(px(16.)).flex_none().flex().justify_center().child(dot(kind_color(o.kind))).into_any_element()
+                                }
+                            })
                             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(text()).child(o.name.clone()))
-                            .child(num(bytes(o.mem)))
-                            .child(num(cpu(o.cpu)).w(px(48.)).flex().justify_end().text_color(muted())),
+                            .child(
+                                metric(IconName::MemoryStick, bytes(o.mem), mem_trend(o.mem, before.map(|b| b.mem)), &key, r.at).w(px(92.)),
+                            )
+                            .child(metric(IconName::Cpu, cpu(o.cpu), cpu_trend(o.cpu, before.map(|b| b.cpu)), &key, r.at).w(px(70.))),
                     )
                     .child(bar(top(o) / max, kind_color(o.kind)))
             }))
     }
 
     fn session(&self, s: &SessionView, cx: &mut Context<Self>) -> Stateful<Div> {
+        let r_at = self.report.as_ref().map_or(0, |r| r.at);
         let open = self.expanded.contains(&s.id);
         let working = s.status.as_deref() == Some("busy");
         let id = s.id.clone();
@@ -283,8 +355,32 @@ impl Machine {
                     .child(dot(if working { amber() } else { green() }))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(s.title.clone()))
                     .child(chip(s.project.clone(), muted()))
-                    .child(num(bytes(s.mem + s.docker_mem)).w(px(64.)).flex().justify_end())
-                    .child(num(cpu(s.cpu + s.docker_cpu)).w(px(56.)).flex().justify_end().text_color(muted())),
+                    .child({
+                        let before = self.prev.as_ref().and_then(|p| p.sessions.iter().find(|x| x.id == s.id));
+                        let key = format!("s-{}", s.id);
+                        div()
+                            .flex()
+                            .child(
+                                metric(
+                                    IconName::MemoryStick,
+                                    bytes(s.mem + s.docker_mem),
+                                    mem_trend(s.mem + s.docker_mem, before.map(|b| b.mem + b.docker_mem)),
+                                    &key,
+                                    r_at,
+                                )
+                                .w(px(92.)),
+                            )
+                            .child(
+                                metric(
+                                    IconName::Cpu,
+                                    cpu(s.cpu + s.docker_cpu),
+                                    cpu_trend(s.cpu + s.docker_cpu, before.map(|b| b.cpu + b.docker_cpu)),
+                                    &key,
+                                    r_at,
+                                )
+                                .w(px(70.)),
+                            )
+                    }),
             );
         if let Some(a) = &s.activity {
             let cost = a.mem.map(|m| format!("{} · {}", bytes(m), cpu(a.cpu.unwrap_or(0.0))));
@@ -544,8 +640,93 @@ impl Render for Machine {
         self.snapshot(&r, window, cx);
         #[cfg(not(feature = "snapshot"))]
         let _ = window;
+        self.load_icons(&r, cx);
         root.child(self.header(&r, cx))
             .child(self.machine(&r))
             .child(div().flex().flex_1().min_h_0().child(self.owners(&r)).child(self.sessions(&r, cx)))
     }
+}
+
+/// Whether a number went up, down or stayed about the same since the last report.
+#[derive(Clone, Copy, PartialEq)]
+enum Trend {
+    Up,
+    Down,
+    Flat,
+}
+
+/// Memory moves by a few MB all the time: only a change of 1% and at least 8 MB counts.
+fn mem_trend(now: u64, before: Option<u64>) -> Trend {
+    let Some(b) = before else { return Trend::Flat };
+    let d = now as f64 - b as f64;
+    if d.abs() < (b as f64 * 0.01).max(8e6) {
+        Trend::Flat
+    } else if d > 0.0 {
+        Trend::Up
+    } else {
+        Trend::Down
+    }
+}
+
+/// CPU jumps from one sample to the next: only a change of 15% and at least 3 points counts.
+fn cpu_trend(now: f32, before: Option<f32>) -> Trend {
+    let Some(b) = before else { return Trend::Flat };
+    let d = now - b;
+    if d.abs() < (b * 0.15).max(3.0) {
+        Trend::Flat
+    } else if d > 0.0 {
+        Trend::Up
+    } else {
+        Trend::Down
+    }
+}
+
+/// A small triangle: red and up when a number grew, green and down when it shrank. It keeps its room when flat, so
+/// the numbers never shift, and fades in with each new report.
+fn trend_mark(t: Trend, key: &str, at: u64) -> AnyElement {
+    let slot = div().w(px(8.)).h(px(8.)).flex_none();
+    if t == Trend::Flat {
+        return slot.into_any_element();
+    }
+    let up = t == Trend::Up;
+    let color = if up { red() } else { green() };
+    slot.child(
+        canvas(
+            |_, _, _| {},
+            move |b, _, window, _| {
+                let (x, y, w, h) = (b.origin.x, b.origin.y, b.size.width, b.size.height);
+                let mut p = PathBuilder::fill();
+                if up {
+                    p.move_to(point(x + w / 2.0, y));
+                    p.line_to(point(x + w, y + h));
+                    p.line_to(point(x, y + h));
+                } else {
+                    p.move_to(point(x, y));
+                    p.line_to(point(x + w, y));
+                    p.line_to(point(x + w / 2.0, y + h));
+                }
+                p.close();
+                if let Ok(p) = p.build() {
+                    window.paint_path(p, color);
+                }
+            },
+        )
+        .size_full(),
+    )
+    .with_animation(SharedString::from(format!("{key}-{at}")), Animation::new(Duration::from_millis(250)), |el, t| el.opacity(t))
+    .into_any_element()
+}
+
+/// A number with its icon in front and its trend after, right-aligned in its column.
+fn metric(icon: IconName, value: String, t: Trend, key: &str, at: u64) -> Div {
+    let key = format!("{key}-{}", if icon == IconName::Cpu { "cpu" } else { "mem" });
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_end()
+        .gap(px(4.))
+        .child(icons::line(icon, faint(), 11.))
+        .child(num(value).text_color(if icon == IconName::Cpu { muted() } else { text() }))
+        .child(trend_mark(t, &key, at))
 }

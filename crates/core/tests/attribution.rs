@@ -100,6 +100,11 @@ fn owners_add_up_without_counting_twice() {
     assert_eq!(owner(OwnerKind::App, "Terminal"), Some(153_000_000));
     assert_eq!(owner(OwnerKind::System, "System"), Some(1_050_000_000));
     assert_eq!(owner(OwnerKind::Other, "postgres"), Some(90_000_000));
+    // an app is named by its outer bundle, which also gives its icon
+    let bundle = |name: &str| r.owners.iter().find(|o| o.name == name).and_then(|o| o.bundle.clone());
+    assert_eq!(bundle("Claude").as_deref(), Some("/Applications/Claude.app"));
+    assert_eq!(bundle("Google Chrome").as_deref(), Some("/Applications/Google Chrome.app"));
+    assert_eq!(bundle("postgres"), None);
     assert_eq!(r.owners[0].name, "Example Linux VM");
     let vm = r.docker.as_ref().unwrap().vm.as_ref().unwrap();
     assert_eq!(vm.other_mem, 13 * GB - 12_580_000_000);
