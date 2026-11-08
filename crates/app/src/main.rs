@@ -5,6 +5,8 @@ mod dash;
 mod glide;
 mod layout;
 mod map;
+mod panel;
+mod settings;
 mod shell;
 mod state;
 mod timeline;
@@ -71,6 +73,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        cx.set_global(settings::Settings::load());
         // The inputs and other components follow the window's dark palette, not the system's light one.
         gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
         let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);

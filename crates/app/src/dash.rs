@@ -1,6 +1,7 @@
 //! The Usage tab: what the tokens of every session would cost on the API, per day or hour, the last two hours,
 //! when you work, by model, the top sessions and tools, and records. Read from `UsageView`; nothing is sent anywhere.
 use crate::glide::Glide;
+use crate::settings::{self, Settings};
 use crate::ui::blue; // over gpui's color of the same name
 use crate::ui::*;
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
@@ -427,8 +428,19 @@ impl DashView {
         });
         DashView {
             usage: None,
-            range: Range::Days(30),
-            metric: Metric::Usd,
+            range: match cx.global::<Settings>().usage_range.as_str() {
+                "today" => Range::Today,
+                "7d" => Range::Days(7),
+                "90d" => Range::Days(90),
+                "all" => Range::All,
+                _ => Range::Days(30),
+            },
+            metric: match cx.global::<Settings>().usage_metric.as_str() {
+                "out" => Metric::Out,
+                "all" => Metric::All,
+                "replies" => Metric::Replies,
+                _ => Metric::Usd,
+            },
             cache: None,
             scroll: Glide::default(),
             root: Rc::default(),
@@ -673,6 +685,7 @@ impl Render for DashView {
                 .map(|(r, label)| {
                     button(format!("u-range-{label}"), label, self.range == r).on_click(cx.listener(move |v, _, _, cx| {
                         v.range = r;
+                        settings::change(cx, |s| s.usage_range = label.to_lowercase());
                         cx.notify();
                     }))
                 })
@@ -682,6 +695,13 @@ impl Render for DashView {
             .map(|(m, label)| {
                 button(format!("u-metric-{label}"), label, self.metric == m).on_click(cx.listener(move |v, _, _, cx| {
                     v.metric = m;
+                    let name = match m {
+                        Metric::Usd => "usd",
+                        Metric::Out => "out",
+                        Metric::All => "all",
+                        Metric::Replies => "replies",
+                    };
+                    settings::change(cx, |s| s.usage_metric = name.into());
                     cx.notify();
                 }))
             })

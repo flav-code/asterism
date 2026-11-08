@@ -3984,6 +3984,7 @@ dependencies = [
 name = "mdb-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui-kit",
  "gpui-pre-platform",
  "mdb-core",

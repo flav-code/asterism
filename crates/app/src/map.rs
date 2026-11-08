@@ -2,6 +2,7 @@
 //! they send, and to their subagents. Positions are kept between launches so the map looks the same each time.
 use crate::glide;
 use crate::layout::{Body, Link, Sim};
+use crate::settings::{self, Settings, data_dir};
 use crate::state::{Filters, is_session, node_tip, project_colors, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
@@ -11,7 +12,6 @@ use mdb_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -83,18 +83,6 @@ pub struct MapView {
 
 impl EventEmitter<MapEvent> for MapView {}
 
-fn data_dir() -> PathBuf {
-    #[allow(deprecated)]
-    let home = std::env::home_dir().unwrap_or_default();
-    if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/my-dev-business")
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map_or(home.clone(), PathBuf::from).join("my-dev-business")
-    } else {
-        home.join(".config/my-dev-business")
-    }
-}
-
 fn radius_of(n: &Node, deg: u32) -> f32 {
     match n.kind {
         NodeKind::Agent => 3.4,
@@ -160,7 +148,11 @@ impl MapView {
             mouse: Point::default(),
             drag: None,
             selected: None,
-            titles: Titles::All,
+            titles: match cx.global::<Settings>().titles.as_str() {
+                "open" => Titles::Open,
+                "off" => Titles::Off,
+                _ => Titles::All,
+            },
             active: true,
             comets: Vec::new(),
             seen: HashSet::new(),
@@ -198,7 +190,7 @@ impl MapView {
         cx.notify();
     }
 
-    fn queue_comet(&mut self, from: &str, to: &str, report: bool) {
+    pub fn queue_comet(&mut self, from: &str, to: &str, report: bool) {
         if let (Some(&a), Some(&b)) = (self.body_of.get(from), self.body_of.get(to)) {
             self.comets.push(Comet { from: a, to: b, started: Instant::now(), color: if report { green() } else { blue() } });
         }
@@ -814,6 +806,12 @@ impl Render for MapView {
                 .child(label)
                 .on_click(cx.listener(move |m, _, _, cx| {
                     m.titles = mode;
+                    let name = match mode {
+                        Titles::All => "all",
+                        Titles::Open => "open",
+                        Titles::Off => "off",
+                    };
+                    settings::change(cx, |s| s.titles = name.into());
                     cx.notify();
                 }))
         };
