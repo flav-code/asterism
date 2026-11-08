@@ -106,3 +106,46 @@ mod tests {
         assert!((a - b).abs() < 0.01 && a > 90.0 && a < 100.0, "{a} {b}");
     }
 }
+
+/// Opacities that fade to where they should be instead of switching: titles appearing on hover, the rest of the map
+/// dimming around a focus. Each frame asks for every value it draws; values nobody asked for are dropped.
+#[derive(Default)]
+pub struct Fades {
+    shown: std::collections::HashMap<u64, (f32, u64)>,
+    frame: u64,
+    dt: f32,
+    last: Option<Instant>,
+    /// Something is still fading: draw another frame.
+    pub moving: bool,
+}
+
+/// How fast a fade closes in (about 95% in 3 × FADE_TAU).
+const FADE_TAU: f32 = 0.06;
+
+impl Fades {
+    pub fn begin(&mut self) {
+        let now = Instant::now();
+        self.dt = self.last.map_or(0.0, |l| (now - l).as_secs_f32().min(0.1));
+        (self.last, self.moving) = (Some(now), false);
+        self.frame += 1;
+    }
+
+    /// The value of `key` this frame, on its way to `to`; a new key starts at `from`.
+    pub fn get(&mut self, key: u64, to: f32, from: f32) -> f32 {
+        let (frame, k) = (self.frame, (-self.dt / FADE_TAU).exp());
+        let e = self.shown.entry(key).or_insert((from, frame));
+        let mut v = to + (e.0 - to) * k;
+        if off() || (v - to).abs() < 0.005 {
+            v = to;
+        } else {
+            self.moving = true;
+        }
+        *e = (v, frame);
+        v
+    }
+
+    pub fn end(&mut self) {
+        let frame = self.frame;
+        self.shown.retain(|_, v| v.1 == frame);
+    }
+}

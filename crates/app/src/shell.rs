@@ -533,6 +533,7 @@ impl Shell {
         };
         let map_tab = matches!(self.tab, Tab::Map | Tab::Timeline);
         let replaying = self.replay.is_some();
+        // The tabs come first and never move; the window's title already names the app.
         div()
             .flex()
             .items_center()
@@ -541,18 +542,9 @@ impl Shell {
             .py(px(10.0))
             .border_b_1()
             .border_color(line())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .flex_none()
-                    .child(dot(blue()).size(px(12.0)))
-                    .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).child("my-dev-business")),
-            )
+            .child(seg(tabs))
             .children(stats.filter(|_| map_tab))
             .child(div().flex_1())
-            .child(seg(tabs))
             .when(map_tab, |d| {
                 d.child(seg(ranges))
                     .child(div().w(px(120.0)).child(Input::new(&self.search)))

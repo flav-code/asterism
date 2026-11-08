@@ -28,7 +28,7 @@ impl Default for Settings {
             project: None,
             archived: true,
             agents: true,
-            titles: "all".into(),
+            titles: "hover".into(),
             panel: true,
             feed: true,
             usage_range: "30d".into(),
@@ -66,7 +66,7 @@ impl Settings {
             project: v.get("project").and_then(Value::as_str).map(str::to_string),
             archived: b("archived", d.archived),
             agents: b("agents", d.agents),
-            titles: s("titles", &d.titles),
+            titles: s("map_titles", &d.titles),
             panel: b("panel", d.panel),
             feed: b("feed", d.feed),
             usage_range: s("usage_range", &d.usage_range),
@@ -80,7 +80,7 @@ impl Settings {
         }
         let v = json!({
             "tab": self.tab, "range": self.range, "project": self.project, "archived": self.archived, "agents": self.agents,
-            "titles": self.titles, "panel": self.panel, "feed": self.feed,
+            "map_titles": self.titles, "panel": self.panel, "feed": self.feed,
             "usage_range": self.usage_range, "usage_metric": self.usage_metric,
         });
         let dir = data_dir();

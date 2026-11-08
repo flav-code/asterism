@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Titles {
-    All,
+    /// Only the hovered or selected session and its neighbours.
+    Hover,
     Open,
-    Off,
+    All,
 }
 
 /// The selection changed: read it from `selected`.
@@ -61,7 +62,10 @@ pub struct MapView {
     subagents: Vec<u32>,
     quiet: Vec<bool>,
     signature: u64,
+    /// Where each session was last laid out, per range: each range keeps its own picture.
     saved: HashMap<String, (f32, f32)>,
+    saved_by_range: HashMap<String, HashMap<String, (f32, f32)>>,
+    range_key: String,
     first_layout: bool,
     k: f32,
     tx: f32,
@@ -79,6 +83,16 @@ pub struct MapView {
     comets: Vec<Comet>,
     seen: HashSet<String>,
     _breath: Task<()>,
+    fades: glide::Fades,
+    /// A hash of each body's session id: the key of its fades.
+    hashes: Vec<u64>,
+    /// New bubbles are finding their place while the others hold still; these may move.
+    newcomers: HashSet<String>,
+    /// Snapshot builds: where each title went last frame, to count the ones that move.
+    #[cfg(feature = "snapshot")]
+    spots: HashMap<usize, bool>,
+    #[cfg(feature = "snapshot")]
+    prev_xy: HashMap<u64, (f32, f32)>,
 }
 
 impl EventEmitter<MapEvent> for MapView {}
@@ -105,9 +119,9 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
 
 impl MapView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let saved = std::fs::read(data_dir().join("positions.json"))
+        let saved_by_range = std::fs::read(data_dir().join("positions-by-range.json"))
             .ok()
-            .and_then(|b| serde_json::from_slice::<HashMap<String, (f32, f32)>>(&b).ok())
+            .and_then(|b| serde_json::from_slice::<HashMap<String, HashMap<String, (f32, f32)>>>(&b).ok())
             .unwrap_or_default();
         // Working sessions breathe; a gentle 12 frames per second is enough and costs little.
         let breath = cx.spawn(async move |this, cx| {
@@ -136,7 +150,9 @@ impl MapView {
             subagents: Vec::new(),
             quiet: Vec::new(),
             signature: 0,
-            saved,
+            saved: HashMap::new(),
+            saved_by_range,
+            range_key: String::new(),
             first_layout: true,
             k: 1.0,
             tx: 0.0,
@@ -150,13 +166,20 @@ impl MapView {
             selected: None,
             titles: match cx.global::<Settings>().titles.as_str() {
                 "open" => Titles::Open,
-                "off" => Titles::Off,
-                _ => Titles::All,
+                "all" => Titles::All,
+                _ => Titles::Hover,
             },
             active: true,
             comets: Vec::new(),
             seen: HashSet::new(),
             _breath: breath,
+            fades: glide::Fades::default(),
+            hashes: Vec::new(),
+            newcomers: HashSet::new(),
+            #[cfg(feature = "snapshot")]
+            spots: HashMap::new(),
+            #[cfg(feature = "snapshot")]
+            prev_xy: HashMap::new(),
         }
     }
 
@@ -182,6 +205,17 @@ impl MapView {
         if filters != &self.filters {
             self.first_layout = true;
             self.fit_pending = true;
+        }
+        // Another range: its own saved picture, and none of the bubbles of the last one.
+        let range_key = format!("{:?}", filters.range_h);
+        if range_key != self.range_key {
+            let previous = std::mem::take(&mut self.saved);
+            if !self.range_key.is_empty() {
+                self.saved_by_range.insert(std::mem::take(&mut self.range_key), previous);
+            }
+            self.saved = self.saved_by_range.get(&range_key).cloned().unwrap_or_default();
+            self.range_key = range_key;
+            (self.body_of, self.sim.bodies, self.newcomers) = (HashMap::new(), Vec::new(), HashSet::new());
         }
         self.filters = filters.clone();
         self.colors = project_colors(&graph);
@@ -296,7 +330,8 @@ impl MapView {
                 y,
                 vx: 0.0,
                 vy: 0.0,
-                pinned: false,
+                // While newcomers find their place, every bubble already on the map holds still.
+                pinned: !self.newcomers.is_empty() && known.is_some() && !self.newcomers.contains(&n.id),
                 r: radius[b] + pad,
                 charge: if agent { -14.0 } else { -200.0 },
                 anchor,
@@ -319,18 +354,28 @@ impl MapView {
         self.links = links;
         self.pairs = pairs.into_values().collect();
         self.subagents = subagents;
+        self.hashes = nodes
+            .iter()
+            .map(|n| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                n.id.hash(&mut h);
+                h.finish()
+            })
+            .collect();
         if changed || self.first_layout {
-            let all_known = !nodes.is_empty() && restored == nodes.len();
-            if self.first_layout && all_known {
-                self.sim.alpha = 0.0; // the same picture as last time: nothing moves
-            } else {
-                if self.first_layout {
-                    // Bodies with a known place hold still while the new ones find theirs.
-                    for (b, n) in nodes.iter().enumerate() {
-                        self.sim.bodies[b].pinned = old.contains_key(&n.id) || self.saved.contains_key(&n.id);
-                    }
+            // A bubble on the map never moves on its own: new links or arcs between known bubbles only redraw, and
+            // new bubbles find their place around the others, which hold still. Only a first map lays out freely.
+            let unknown: Vec<usize> =
+                (0..nodes.len()).filter(|&b| !old.contains_key(&nodes[b].id) && !self.saved.contains_key(&nodes[b].id)).collect();
+            if restored == 0 && !nodes.is_empty() {
+                self.newcomers.clear();
+                self.sim.alpha = 1.0;
+            } else if !unknown.is_empty() {
+                self.newcomers.extend(unknown.iter().map(|&b| nodes[b].id.clone()));
+                for (b, n) in nodes.iter().enumerate() {
+                    self.sim.bodies[b].pinned = !self.newcomers.contains(&n.id);
                 }
-                self.sim.alpha = if self.first_layout { 1.0 } else { 0.35 };
+                self.sim.alpha = self.sim.alpha.max(0.35);
             }
             self.first_layout = nodes.is_empty();
         }
@@ -340,17 +385,19 @@ impl MapView {
         for b in &mut self.sim.bodies {
             b.pinned = false;
         }
+        self.newcomers.clear();
         let Some(g) = &self.graph else { return };
         for (b, &i) in self.node_of.iter().enumerate() {
             self.saved.insert(g.nodes[i].id.clone(), (self.sim.bodies[b].x, self.sim.bodies[b].y));
         }
         let ids: HashSet<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         self.saved.retain(|id, _| ids.contains(id.as_str()));
+        self.saved_by_range.insert(self.range_key.clone(), self.saved.clone());
         let dir = data_dir();
         if std::fs::create_dir_all(&dir).is_ok()
-            && let Ok(json) = serde_json::to_vec(&self.saved)
+            && let Ok(json) = serde_json::to_vec(&self.saved_by_range)
         {
-            std::fs::write(dir.join("positions.json"), json).ok();
+            std::fs::write(dir.join("positions-by-range.json"), json).ok();
         }
     }
 
@@ -518,7 +565,7 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
             strikethrough: None,
         };
         let fs = px(font_size);
-        let halo = window.text_system().shape_line(text.clone(), fs, &[run(bg())], None);
+        let halo = window.text_system().shape_line(text.clone(), fs, &[run(alpha(bg(), color.a))], None);
         let line = window.text_system().shape_line(text.clone(), fs, &[run(color)], None);
         let x = if center { p.x - line.width() / 2.0 } else { p.x };
         let origin = o + point(x, p.y);
@@ -575,10 +622,15 @@ impl Render for MapView {
         let mut scene = Scene { lines: vec![], arrows: vec![], circles: vec![], labels: vec![], comets: vec![], ripples: vec![] };
 
         let focus_link = |a: usize, b: usize| focus.is_some_and(|f| f == a || f == b);
+        // Hovering dims the rest of the map and shows titles: both fade instead of switching.
+        let mut fades = std::mem::take(&mut self.fades);
+        fades.begin();
+        let hk = &self.hashes;
         for &(s, tgt, kind) in &self.links {
             let (a, b) = (at(s), at(tgt));
             let n = &g.nodes[self.node_of[s]];
-            let faded = |c: Rgba, op: f32| alpha(c, if near.is_some() && !focus_link(s, tgt) { 0.12 } else { op });
+            let lit = fades.get(hk[s].wrapping_mul(31) ^ hk[tgt] ^ 0xa, if near.is_some() && !focus_link(s, tgt) { 0.0 } else { 1.0 }, 1.0);
+            let faded = |c: Rgba, op: f32| alpha(c, 0.12 + (op - 0.12) * lit);
             match kind {
                 EdgeKind::Agent => {
                     if far && !focus_link(s, tgt) {
@@ -603,13 +655,9 @@ impl Render for MapView {
             let ctrl = point(mid.x - (b.y - a.y) * 0.2, mid.y + (b.x - a.x) * 0.2);
             let color = if p.reports == p.n { green() } else { blue() };
             let fresh = now.saturating_sub(p.last) < 20 * 60_000;
-            let op = if near.is_some() && !focus_link(p.a, p.b) {
-                0.12
-            } else if fresh {
-                0.9
-            } else {
-                0.6
-            };
+            let lit =
+                fades.get(hk[p.a].wrapping_mul(37) ^ hk[p.b] ^ 0xb, if near.is_some() && !focus_link(p.a, p.b) { 0.0 } else { 1.0 }, 1.0);
+            let op = 0.12 + (if fresh { 0.9 } else { 0.6 } - 0.12) * lit;
             scene.lines.push((vec![a, b], Some(ctrl), 1.3 + (p.n as f32).log2() * 1.1, alpha(color, op), false));
         }
 
@@ -633,13 +681,8 @@ impl Render for MapView {
             let c = at(b);
             let r = self.radius[b] * k;
             let pc = self.color(n);
-            let op = if dim(b) {
-                0.12
-            } else if n.archived && !n.live {
-                0.38
-            } else {
-                1.0
-            };
+            let lit = fades.get(hk[b] ^ 0xc, if dim(b) { 0.0 } else { 1.0 }, 1.0);
+            let op = 0.12 + (if n.archived && !n.live { 0.38 } else { 1.0 } - 0.12) * lit;
             let (fill, stroke, width, dashed) = match n.kind {
                 NodeKind::Remote | NodeKind::Ghost => (rgb(0x0b0c12), rgb(0xb8b9c6), 1.4, true),
                 NodeKind::Agent if n.live => (amber(), amber(), 0.0, false),
@@ -669,6 +712,8 @@ impl Render for MapView {
         }
 
         let mut kept: Vec<Bounds<Pixels>> = Vec::new();
+        #[cfg(feature = "snapshot")]
+        let mut spots: HashMap<usize, bool> = HashMap::new();
         let cores: Vec<(usize, Bounds<Pixels>)> = (0..self.node_of.len())
             .filter(|&b| g.nodes[self.node_of[b]].kind != NodeKind::Agent)
             .map(|b| {
@@ -684,11 +729,12 @@ impl Render for MapView {
             }
             let in_focus = near.as_ref().is_some_and(|s| s.contains(&b));
             let wanted = match self.titles {
-                Titles::Off => in_focus,
+                Titles::Hover => in_focus,
                 Titles::Open => n.live || in_focus,
                 Titles::All => (!self.quiet[b] || in_focus) && (!far || n.live || in_focus),
             };
-            if !wanted || dim(b) {
+            let shown = fades.get(hk[b] ^ 0xd, if wanted && !dim(b) { 1.0 } else { 0.0 }, 0.0);
+            if shown < 0.01 {
                 continue;
             }
             let title: SharedString = clip(&n.title, 34).into();
@@ -728,7 +774,9 @@ impl Render for MapView {
                 .find(|(rect, ignore)| free(rect, *ignore));
             let Some((rect, _)) = spot else { continue };
             kept.push(rect);
-            let color = if n.live { rgb(0xffffff) } else { rgb(0xcfd0dc) };
+            #[cfg(feature = "snapshot")]
+            spots.insert(b, rect.origin.y < c.y);
+            let color = alpha(if n.live { rgb(0xffffff) } else { rgb(0xcfd0dc) }, shown);
             scene.labels.push((
                 point(c.x, rect.origin.y),
                 title,
@@ -739,7 +787,14 @@ impl Render for MapView {
             ));
             if in_focus && let Some(m) = n.now.as_ref().filter(|_| working(n)) {
                 let line: SharedString = clip(&format!("⟳ {} · {}", m.tool, m.detail), 44).into();
-                scene.labels.push((point(c.x, rect.origin.y + px(h)), line, font_px * 0.95, amber(), true, FontWeight::NORMAL));
+                scene.labels.push((
+                    point(c.x, rect.origin.y + px(h)),
+                    line,
+                    font_px * 0.95,
+                    alpha(amber(), shown),
+                    true,
+                    FontWeight::NORMAL,
+                ));
             }
             if far && self.subagents[b] > 0 {
                 scene.labels.push((
@@ -751,6 +806,21 @@ impl Render for MapView {
                     FontWeight::SEMIBOLD,
                 ));
             }
+        }
+        #[cfg(feature = "snapshot")]
+        {
+            let moved = spots.iter().filter(|(b, up)| self.spots.get(b) != Some(up)).count()
+                + self.spots.keys().filter(|b| !spots.contains_key(b)).count();
+            glide::trace("titles", spots.len() as f32);
+            glide::trace("titles_moved", moved as f32);
+            glide::trace("alpha", self.sim.alpha);
+            let xy: HashMap<u64, (f32, f32)> = self.hashes.iter().zip(&self.sim.bodies).map(|(h, b)| (*h, (b.x, b.y))).collect();
+            let moved =
+                xy.iter().filter(|(h, p)| self.prev_xy.get(h).is_some_and(|q| (q.0 - p.0).abs() + (q.1 - p.1).abs() > 0.01)).count();
+            glide::trace("bubbles_moved", moved as f32);
+            glide::trace("bubbles", xy.len() as f32);
+            self.prev_xy = xy;
+            self.spots = spots;
         }
         // Project names, faint, behind everything: only where no title or bubble is.
         {
@@ -786,6 +856,11 @@ impl Render for MapView {
                 scene.ripples.push((b, self.radius[c.to] * k + 34.0 * t, alpha(c.color, 1.0 - t)));
             }
         }
+        fades.end();
+        if fades.moving {
+            window.request_animation_frame();
+        }
+        self.fades = fades;
         if !self.comets.is_empty() {
             window.request_animation_frame();
         }
@@ -809,7 +884,7 @@ impl Render for MapView {
                     let name = match mode {
                         Titles::All => "all",
                         Titles::Open => "open",
-                        Titles::Off => "off",
+                        Titles::Hover => "hover",
                     };
                     settings::change(cx, |s| s.titles = name.into());
                     cx.notify();
@@ -890,9 +965,9 @@ impl Render for MapView {
                     .border_1()
                     .border_color(line())
                     .child(div().px(px(8.0)).text_size(px(11.0)).text_color(faint()).child("Titles"))
-                    .child(titles_seg("All", Titles::All))
+                    .child(titles_seg("Hover", Titles::Hover))
                     .child(titles_seg("Open", Titles::Open))
-                    .child(titles_seg("Off", Titles::Off)),
+                    .child(titles_seg("All", Titles::All)),
             )
             .child(legend())
             .children(tip)
