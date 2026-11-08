@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "asterism"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "asterism-core",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "asterism-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "asterism-core",
  "serde_json",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "asterism-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bollard",
  "chrono",
