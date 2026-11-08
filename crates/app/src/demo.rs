@@ -45,7 +45,8 @@ const TITLES: &[&str] = &[
 ];
 const AGENTS: &[&str] = &["Explore the codebase", "Run the test suite", "Review the diff", "Search the docs", "Check the logs"];
 const PROJECTS: &[&str] = &["web", "api", "mobile", "infra", "docs", "design", "data", "cli", "site", "lab", "sdk", "ops"];
-const SAYS: &[&str] = &["Status update", "Review done, two comments", "Tests pass", "Need a decision on the schema", "Merged", "Found the cause"];
+const SAYS: &[&str] =
+    &["Status update", "Review done, two comments", "Tests pass", "Need a decision on the schema", "Merged", "Found the cause"];
 
 fn pick<'a>(list: &'a [&'a str], key: &str) -> &'a str {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -67,8 +68,11 @@ pub fn graph(g: &Graph) -> Graph {
     }
     let mut order: Vec<(String, usize)> = sizes.into_iter().collect();
     order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let project: HashMap<String, String> =
-        order.iter().enumerate().map(|(i, (p, _))| (p.clone(), PROJECTS.get(i).map_or(format!("project-{i}"), |s| s.to_string()))).collect();
+    let project: HashMap<String, String> = order
+        .iter()
+        .enumerate()
+        .map(|(i, (p, _))| (p.clone(), PROJECTS.get(i).map_or(format!("project-{i}"), |s| s.to_string())))
+        .collect();
     for n in &mut g.nodes {
         n.title = match n.kind {
             NodeKind::Agent => pick(AGENTS, &n.id).to_string(),
