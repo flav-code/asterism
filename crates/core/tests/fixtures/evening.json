@@ -1,0 +1,60 @@
+{
+  "_about": "A loaded evening, recorded as plain data: five agent sessions, a Docker VM, apps. Paths and names are made up.",
+  "home": "/Users/me",
+  "at": 1794100000000,
+  "host": { "ncpu": 18, "cpu": 1450, "memory": { "total": 51539607552, "used": 47000000000, "compressed": 18000000000, "swap_total": 6442450944, "swap_used": 5700000000, "pressure": "critical" } },
+  "docker": { "name": "Example Linux VM", "ncpu": 15, "mem": 25769803776 },
+  "procs": [
+    { "pid": 1, "ppid": 0, "name": "launchd", "cmd": "/sbin/launchd", "exe": "/sbin/launchd", "cpu": 0.2, "mem": 20000000, "start": 1793700000 },
+    { "pid": 50, "ppid": 1, "name": "logd", "cmd": "/usr/libexec/logd", "exe": "/usr/libexec/logd", "cpu": 1.0, "mem": 30000000, "start": 1793700000 },
+    { "pid": 60, "ppid": 1, "name": "kernel_task", "cmd": "kernel_task", "exe": "", "cpu": 20.0, "mem": 1000000000, "start": 1793700000 },
+
+    { "pid": 100, "ppid": 1, "name": "Claude", "cmd": "/Applications/Claude.app/Contents/MacOS/Claude", "exe": "/Applications/Claude.app/Contents/MacOS/Claude", "cpu": 5.0, "mem": 1200000000, "start": 1793900000 },
+    { "pid": 101, "ppid": 100, "name": "Claude Helper (Renderer)", "cmd": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer", "exe": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)", "cpu": 12.0, "mem": 800000000, "start": 1793900001 },
+    { "pid": 290, "ppid": 100, "name": "disclaimer", "cmd": "/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- /Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude", "exe": "/Applications/Claude.app/Contents/Helpers/disclaimer", "cpu": 0.0, "mem": 2000000, "start": 1794090000 },
+
+    { "pid": 300, "ppid": 290, "name": "claude", "cmd": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude --verbose --resume=aaaaaaaa-0000-4000-8000-000000000001", "exe": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude", "cwd": "/Users/me/dev/app", "cpu": 3.0, "mem": 600000000, "start": 1794090000 },
+    { "pid": 301, "ppid": 300, "name": "zsh", "cmd": "/bin/zsh -c source /Users/me/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval 'docker run --rm -v /Users/me/dev/app-convert:/app runtime:local npx vitest run' < /dev/null && pwd -P >| /tmp/claude-1-cwd", "exe": "/bin/zsh", "cwd": "/Users/me/dev/app-convert", "cpu": 0.0, "mem": 4000000, "start": 1794099800 },
+    { "pid": 302, "ppid": 301, "name": "docker", "cmd": "docker run --rm -v /Users/me/dev/app-convert:/app runtime:local npx vitest run", "exe": "/usr/local/bin/docker", "cwd": "/Users/me/dev/app-convert", "cpu": 0.5, "mem": 40000000, "start": 1794099800 },
+
+    { "pid": 400, "ppid": 290, "name": "claude", "cmd": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude --verbose --resume=aaaaaaaa-0000-4000-8000-000000000002", "exe": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude", "cwd": "/Users/me/dev/app", "cpu": 2.0, "mem": 650000000, "start": 1794091000 },
+    { "pid": 401, "ppid": 400, "name": "cargo", "cmd": "cargo build --release --api-key=hunter2", "exe": "/usr/local/bin/cargo", "cwd": "/Users/me/dev/app-web", "cpu": 5.0, "mem": 200000000, "start": 1794099700 },
+    { "pid": 402, "ppid": 401, "name": "rustc", "cmd": "rustc --crate-name web src/main.rs", "exe": "/usr/local/bin/rustc", "cwd": "/Users/me/dev/app-web", "cpu": 380.0, "mem": 1500000000, "start": 1794099750 },
+
+    { "pid": 500, "ppid": 290, "name": "claude", "cmd": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude --verbose --resume=aaaaaaaa-0000-4000-8000-000000000003", "exe": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude", "cwd": "/Users/me/dev/tracker", "cpu": 0.5, "mem": 550000000, "start": 1794092000 },
+    { "pid": 800, "ppid": 1, "name": "node", "cmd": "node /Users/me/dev/tracker/node_modules/.bin/nuxt dev", "exe": "/usr/local/bin/node", "cwd": "/Users/me/dev/tracker", "cpu": 30.0, "mem": 2500000000, "start": 1794095000 },
+
+    { "pid": 600, "ppid": 290, "name": "claude", "cmd": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude --verbose --resume=aaaaaaaa-0000-4000-8000-000000000004", "exe": "/Users/me/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude", "cwd": "/Users/me/dev/app", "cpu": 0.2, "mem": 600000000, "start": 1794093000 },
+
+    { "pid": 700, "ppid": 1200, "name": "claude", "cmd": "claude --add-dir /Users/me/notes", "exe": "/Users/me/.local/bin/claude", "cwd": "/Users/me/dev/scratch", "cpu": 1.0, "mem": 500000000, "start": 1794094000 },
+    { "pid": 1200, "ppid": 1199, "name": "zsh", "cmd": "-zsh", "exe": "/bin/zsh", "cwd": "/Users/me", "cpu": 0.0, "mem": 3000000, "start": 1794080000 },
+    { "pid": 1199, "ppid": 1, "name": "Terminal", "cmd": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", "exe": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", "cpu": 1.0, "mem": 150000000, "start": 1794080000 },
+
+    { "pid": 900, "ppid": 1, "name": "com.docker.virtualization", "cmd": "/Applications/Docker.app/Contents/MacOS/com.docker.virtualization --config vm.json", "exe": "/Applications/Docker.app/Contents/MacOS/com.docker.virtualization", "cpu": 950.0, "mem": 13000000000, "start": 1793900000 },
+    { "pid": 910, "ppid": 1, "name": "Docker Desktop", "cmd": "/Applications/Docker.app/Contents/MacOS/Docker Desktop", "exe": "/Applications/Docker.app/Contents/MacOS/Docker Desktop", "cpu": 1.0, "mem": 300000000, "start": 1793900000 },
+
+    { "pid": 1000, "ppid": 1, "name": "Google Chrome", "cmd": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "exe": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "cpu": 4.0, "mem": 600000000, "start": 1793900000 },
+    { "pid": 1001, "ppid": 1000, "name": "Google Chrome Helper (Renderer)", "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer", "exe": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)", "cpu": 8.0, "mem": 1500000000, "start": 1793900100 },
+
+    { "pid": 1100, "ppid": 1, "name": "postgres", "cmd": "/opt/homebrew/opt/postgresql/bin/postgres -D /opt/homebrew/var/postgres", "exe": "/opt/homebrew/opt/postgresql/bin/postgres", "cwd": "/opt/homebrew/var/postgres", "cpu": 0.5, "mem": 90000000, "start": 1793700000 }
+  ],
+  "sessions": [
+    { "id": "aaaaaaaa-0000-4000-8000-000000000001", "host_id": "local_1", "pid": 300, "title": "Convert replies to modules", "project": "app", "cwd": "/Users/me/dev/app", "kind": "desktop", "status": "busy", "started_at": 1794090000000, "dirs": ["/Users/me/dev/app-convert"] },
+    { "id": "aaaaaaaa-0000-4000-8000-000000000002", "host_id": "local_2", "pid": 400, "title": "Web images", "project": "app", "cwd": "/Users/me/dev/app", "kind": "desktop", "status": "busy", "started_at": 1794091000000, "dirs": ["/Users/me/dev/app-web"] },
+    { "id": "aaaaaaaa-0000-4000-8000-000000000003", "host_id": "local_3", "pid": 500, "title": "Tracker", "project": "tracker", "cwd": "/Users/me/dev/tracker", "kind": "desktop", "status": "idle", "started_at": 1794092000000 },
+    { "id": "aaaaaaaa-0000-4000-8000-000000000004", "host_id": "local_4", "pid": 600, "title": "Dashboard", "project": "app", "cwd": "/Users/me/dev/app", "kind": "desktop", "status": "idle", "started_at": 1794093000000, "dirs": ["/Users/me/dev/app"] },
+    { "id": "aaaaaaaa-0000-4000-8000-000000000005", "title": "Scratch notes", "project": "scratch", "cwd": "/Users/me/dev/scratch", "kind": "desktop", "started_at": 1794094020000 },
+    { "id": "aaaaaaaa-0000-4000-8000-00000000dead", "pid": 4242, "title": "Ended long ago", "cwd": "/Users/me/dev/app", "kind": "cli", "status": "idle" }
+  ],
+  "activities": {
+    "aaaaaaaa-0000-4000-8000-000000000001": { "tool": "Bash", "detail": "Run the tests in the runtime image", "command": "docker run --rm -v /Users/me/dev/app-convert:/app runtime:local npx vitest run", "since": 1794099800000 },
+    "aaaaaaaa-0000-4000-8000-000000000003": { "tool": "Bash", "detail": "an interrupted call", "command": "sleep 100", "since": 1794090000000 }
+  },
+  "containers": [
+    { "inspect": { "Id": "c0ffee0000000000000000000000000000000000000000000000000000000001", "Name": "/nice_neumann", "Config": { "Image": "runtime:local", "Cmd": ["npx", "vitest", "run"] }, "HostConfig": { "NanoCpus": 0, "Memory": 0 }, "Mounts": [{ "Type": "bind", "Source": "/Users/me/dev/app-convert" }], "State": { "StartedAt": "2026-11-07T23:23:00Z" } }, "cpu": 640.0, "mem": 3100000000 },
+    { "inspect": { "Id": "c0ffee0000000000000000000000000000000000000000000000000000000002", "Name": "/k3d-web-server-0", "Config": { "Image": "rancher/k3s", "Labels": { "k3d.cluster": "web", "k3d.cluster.token": "SECRET-TOKEN" }, "Cmd": ["server"] }, "HostConfig": { "NanoCpus": 0, "Memory": 0 }, "Mounts": [{ "Type": "bind", "Source": "/Users/me/dev/app-web" }] }, "cpu": 120.0, "mem": 2800000000 },
+    { "inspect": { "Id": "c0ffee0000000000000000000000000000000000000000000000000000000003", "Name": "/k3d-web-serverlb", "Config": { "Image": "k3d-proxy", "Labels": { "k3d.cluster": "web" } }, "HostConfig": { "NanoCpus": 0, "Memory": 0 } }, "cpu": 1.0, "mem": 30000000 },
+    { "inspect": { "Id": "c0ffee0000000000000000000000000000000000000000000000000000000004", "Name": "/tracker-db-1", "Config": { "Image": "postgres:17", "Labels": { "com.docker.compose.project": "tracker", "com.docker.compose.project.working_dir": "/Users/me/dev/tracker" } }, "HostConfig": { "NanoCpus": 2000000000, "Memory": 1073741824 } }, "cpu": 2.0, "mem": 150000000 },
+    { "inspect": { "Id": "c0ffee0000000000000000000000000000000000000000000000000000000005", "Name": "/k3d-dev-server-0", "Config": { "Image": "rancher/k3s", "Labels": { "k3d.cluster": "dev" } }, "HostConfig": { "NanoCpus": 0, "Memory": 0 }, "Mounts": [{ "Type": "bind", "Source": "/Users/me/dev/app" }] }, "cpu": 90.0, "mem": 6500000000 }
+  ]
+}

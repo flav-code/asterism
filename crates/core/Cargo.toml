@@ -1,0 +1,20 @@
+[package]
+name = "mdb-core"
+description = "Finds what each AI coding agent session runs on this machine, and what it costs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+bollard = "0.21.1"
+futures-util = "0.3.34"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sysinfo = "0.40.1"
+tokio = { version = "1.54.1", features = ["rt", "time", "macros"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+libproc = "0.15.0"
