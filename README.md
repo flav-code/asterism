@@ -7,15 +7,24 @@ shows one big "VM Helper" and twenty identical `claude` processes. This tool put
 back under the session that started it: its commands, builds, test runners, Docker containers and local
 Kubernetes clusters, and what the session is doing right now.
 
-**Status:** early. The detection core and a command line work on macOS. A desktop window (GPUI) comes next,
-then Windows.
+**Status:** early. The detection core, a command line and a first desktop window (GPUI) work on macOS.
+Windows comes next.
 
 ## Try it
 
 ```sh
-cargo run -p mdb -- top          # a summary
+cargo run -p mdb-app             # the window, updated every 2 s
+cargo run -p mdb -- top          # a summary in the terminal
 cargo run -p mdb -- top --json   # everything, as JSON
 ```
+
+To save the window as a PNG without screen-recording permission (GPUI renders the frame itself):
+
+```sh
+MDB_SNAPSHOT=window.png cargo run -p mdb-app --features snapshot
+```
+
+`MDB_SNAPSHOT_OPEN=1` opens the biggest session first.
 
 It shows:
 
@@ -51,3 +60,5 @@ like a secret (tokens, keys, passwords, `Authorization` headers, credentials in 
 
 - `crates/core`: the detection, with no UI dependency. Tests run on recorded data (`tests/fixtures`).
 - `crates/cli`: the `mdb` command.
+- `crates/app`: the window, built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
+  Sampling runs on its own thread; the window only reads the latest report.
