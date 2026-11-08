@@ -91,13 +91,16 @@ jobs:
           ## Install
 
           **macOS:** download \`Asterism-$v-macos-arm64.dmg\` (Apple silicon: M1 and later) or \`Asterism-$v-macos-x64.dmg\`
-          (Intel), open it and drag Asterism to Applications. The app is not signed yet: the first time, right-click it
-          and choose Open.
+          (Intel), open it and drag Asterism to Applications. Or, with Homebrew:
+          \`brew trust --cask flav-code/tap/asterism && brew install --cask flav-code/tap/asterism\`. The app is not
+          signed yet: the first time you open it, macOS blocks it; go to System Settings > Privacy & Security and click
+          Open Anyway.
 
           **Windows:** download \`Asterism-$v-windows-x64-setup.exe\` and run it. It installs for your user only, without
           administrator rights (uninstall it from Settings > Apps). The installer is not signed yet: if SmartScreen
-          shows "Windows protected your PC", choose More info, then Run anyway. Windows support is new: please open an
-          issue if something looks wrong.
+          shows "Windows protected your PC", choose More info, then Run anyway. Or, with Scoop:
+          \`scoop bucket add flav-code https://github.com/flav-code/scoop-bucket\`, then \`scoop install flav-code/asterism\`.
+          Windows support is new: please open an issue if something looks wrong.
 
           **Updates:** Asterism checks for new versions on its own. When one is ready, a green arrow shows at the top
           right of the window: click it to restart on the new version.

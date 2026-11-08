@@ -19,12 +19,26 @@ The screenshots come from demo mode: real sessions, with every title, project an
 
 ## Install
 
-Download the latest release (macOS `.dmg` for Apple silicon or Intel, Windows installer) from
-[Releases](https://github.com/flav-code/asterism/releases). The app updates itself: when a newer version is out, a
-green arrow shows at the top right; click it to restart on the new version.
+**macOS** (13 or later), with [Homebrew](https://brew.sh):
 
-The builds are not signed yet. On macOS, open it the first time with right-click → Open. On Windows, SmartScreen asks
-once: More info → Run anyway.
+```sh
+brew trust --cask flav-code/tap/asterism
+brew install --cask flav-code/tap/asterism
+```
+
+**Windows**, with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add flav-code https://github.com/flav-code/scoop-bucket
+scoop install flav-code/asterism
+```
+
+Or download it from [Releases](https://github.com/flav-code/asterism/releases): a `.dmg` for Apple silicon or Intel
+Macs, an installer for Windows. Asterism updates itself: when a newer version is out, a green arrow shows at the top
+right; click it to restart on the new version. Installed with Scoop, it leaves updates to `scoop update`.
+
+The builds are not signed yet. On macOS, the first time you open it, macOS blocks it: go to System Settings → Privacy
+& Security and click Open Anyway. On Windows, SmartScreen asks once: More info → Run anyway.
 
 ## Try it
 
