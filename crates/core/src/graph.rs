@@ -4,6 +4,7 @@ use crate::desktop::DesktopSession;
 use crate::sessions::project_of;
 use crate::transcripts::{Move, Transcripts};
 use crate::usage::{Biggest, PRICES, Totals, Usage, family, model_id};
+use rust_i18n::t;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -397,9 +398,11 @@ impl Visualizer {
         let mut titles: HashMap<String, Vec<String>> = HashMap::new();
         let mut cli_to_node: HashMap<String, String> = HashMap::new();
         let mut by_socket: HashMap<String, String> = HashMap::new();
+        // Read once per build: the check below compares with the same text the node was given.
+        let (untitled, cli_title) = (t!("core.untitled_session"), t!("core.cli_session"));
 
         for d in desktop {
-            let mut n = node(&d.id, NodeKind::Desktop, if d.title.is_empty() { "Untitled session" } else { &d.title }, "");
+            let mut n = node(&d.id, NodeKind::Desktop, if d.title.is_empty() { &untitled } else { &d.title }, "");
             n.project = project_of(d.origin_cwd.as_deref().or(d.cwd.as_deref()).unwrap_or("?"));
             (n.cwd, n.created_at, n.last_at, n.archived) = (d.cwd.clone(), d.created_at, d.last_activity_at, d.archived);
             (n.model, n.profile, n.branch, n.turns, n.scheduled) =
@@ -445,7 +448,7 @@ impl Visualizer {
                 let mut n = node(
                     &id,
                     NodeKind::Cli,
-                    r.names.first().map_or("CLI session", String::as_str),
+                    r.names.first().map_or(&*cli_title, String::as_str),
                     &project_of(r.cwd.as_deref().unwrap_or("?")),
                 );
                 (n.cwd, n.created_at, n.last_at) = (r.cwd.clone(), r.started, r.updated);
@@ -530,7 +533,7 @@ impl Visualizer {
                     }
                 }
                 if n.kind == NodeKind::Cli
-                    && n.title == "CLI session"
+                    && n.title == cli_title
                     && let Some(t) = title
                 {
                     n.title = t;
@@ -577,15 +580,17 @@ impl Visualizer {
                 Some(t) => t,
                 None if m.ok == Some(false) => continue, // failed sends to unknown names would only add junk nodes
                 None => {
-                    let name = if let Some(sock) = m.to.strip_prefix("uds:") {
+                    // The id keeps the English name, so it stays the same when the language changes.
+                    let (key, name) = if let Some(sock) = m.to.strip_prefix("uds:") {
                         let pid = sock.rsplit('/').next().and_then(|f| f.strip_suffix(".sock")).unwrap_or("?");
-                        format!("CLI session · pid {pid}")
+                        (format!("CLI session · pid {pid}"), t!("core.cli_session_pid", pid = pid).into_owned())
                     } else if m.to.starts_with("bridge:") {
-                        "Remote Control session".into()
+                        ("Remote Control session".into(), t!("core.remote_control_session").into_owned())
                     } else {
-                        m.to.rsplit_once(" [").filter(|(_, t)| t.len() == 7).map_or(m.to.clone(), |(h, _)| h.to_string())
+                        let name = m.to.rsplit_once(" [").filter(|(_, t)| t.len() == 7).map_or(m.to.clone(), |(h, _)| h.to_string());
+                        (name.clone(), name)
                     };
-                    let id = format!("ghost:{name}");
+                    let id = format!("ghost:{key}");
                     if !nodes.contains_key(&id) {
                         let remote = m.note.contains("another machine") || m.note.contains("Remote Control");
                         let mut g = node(&id, if remote { NodeKind::Remote } else { NodeKind::Ghost }, &name, "remote");

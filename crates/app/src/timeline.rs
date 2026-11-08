@@ -6,9 +6,11 @@ use crate::state::{Filters, Visible, is_session, node_tip, project_colors, visib
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, NodeKind};
+use asterism_core::i18n;
 use chrono::{Datelike, Duration as Days, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -380,11 +382,11 @@ fn tick_label(t: i64, span_ms: u64) -> String {
     } else if d.hour() != 0 || d.minute() != 0 {
         d.format("%H:%M").to_string()
     } else if d.day() != 1 {
-        d.format("%a %-d").to_string()
+        d.format(&i18n::names(&d, "%a %-d")).to_string()
     } else if span_ms > 60 * DAY as u64 {
-        d.format("%b").to_string()
+        d.format(&i18n::names(&d, "%b")).to_string()
     } else {
-        d.format("%a %-d %b").to_string()
+        d.format(&i18n::names(&d, "%a %-d %b")).to_string()
     }
 }
 
@@ -443,7 +445,7 @@ impl Render for TimelineView {
                 .items_center()
                 .justify_center()
                 .text_color(muted())
-                .child("Reading the sessions…");
+                .child(t!("timeline.loading").to_string());
         };
         let now = now_ms();
         let height = self.layout.rows.len() as f32 * ROW + 24.0;
@@ -451,7 +453,7 @@ impl Render for TimelineView {
         let width = if drawn > 0.0 { drawn } else { f32::from(window.viewport_size().width) };
         let s = self.scale(width, now);
         let span = now.saturating_sub(v.start);
-        let count = self.layout.rows.len();
+        let rows_label = i18n::count("timeline.rows", self.layout.rows.len() as u64);
 
         // The axis.
         let axis = {
@@ -488,7 +490,7 @@ impl Render for TimelineView {
                     paint_text(
                         window,
                         cx,
-                        format!("{count} sessions · newest at top").into(),
+                        rows_label.into(),
                         (o.x + px(14.0), o.y + px(17.0)),
                         0.0,
                         10.5,
@@ -714,8 +716,8 @@ impl Render for TimelineView {
                 Hover::Msg(m) => {
                     let msg = &g.messages[m];
                     let title = |id: &str| g.nodes.iter().find(|n| n.id == id).map_or_else(|| id.to_string(), |n| clip(&n.title, 40));
-                    let kind = if msg.kind == MsgKind::Report { "Report" } else { "Message" };
-                    let failed = if msg.ok == Some(false) { " · failed" } else { "" };
+                    let kind = if msg.kind == MsgKind::Report { t!("timeline.tip.report") } else { t!("timeline.tip.message") };
+                    let failed = if msg.ok == Some(false) { format!(" · {}", t!("timeline.tip.failed")) } else { String::new() };
                     let what = if msg.summary.is_empty() { &msg.text } else { &msg.summary };
                     tip_card(pos)
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} → {}", title(&msg.from), title(&msg.to))))

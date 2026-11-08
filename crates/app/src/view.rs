@@ -6,9 +6,11 @@ use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::Report;
 use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionView};
 use asterism_core::host::Pressure;
+use asterism_core::i18n::count;
 use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,9 +129,10 @@ impl Machine {
     }
 
     fn header(&self, r: &Report, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let toggle = |label: &'static str, on: bool, cpu_sort: bool| {
+        // `id` stays English so the element keeps its id in every language.
+        let toggle = |id: &'static str, label: String, on: bool, cpu_sort: bool| {
             div()
-                .id(label)
+                .id(id)
                 .px(px(10.))
                 .py(px(3.))
                 .rounded(px(6.))
@@ -145,7 +148,10 @@ impl Machine {
         };
         let sort = self.sort_seg.render(
             usize::from(self.by_cpu),
-            vec![toggle("RAM", !self.by_cpu, false), toggle("CPU", self.by_cpu, true)],
+            vec![
+                toggle("RAM", t!("view.sort_ram").into_owned(), !self.by_cpu, false),
+                toggle("CPU", t!("view.cpu").into_owned(), self.by_cpu, true),
+            ],
             window,
             cx,
         );
@@ -158,21 +164,16 @@ impl Machine {
             .py(px(10.))
             .border_b_1()
             .border_color(line())
-            .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child("Who uses this machine"))
-            .child(div().text_size(px(12.)).text_color(faint()).child(format!("updated {updated} ago")))
+            .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(t!("view.title").into_owned()))
+            .child(div().text_size(px(12.)).text_color(faint()).child(t!("view.updated", ago = updated).into_owned()))
             .child(div().flex_1())
-            .child(div().text_size(px(12.)).text_color(faint()).child("Sort by"))
+            .child(div().text_size(px(12.)).text_color(faint()).child(t!("view.sort_by").into_owned()))
             .child(sort)
     }
 
     fn machine(&self, r: &Report) -> Div {
         let m = &r.host.memory;
-        let tile = |label: &str| {
-            let icon = match label {
-                "Memory" | "Memory pressure" | "Swap" => Some(IconName::MemoryStick),
-                "CPU" => Some(IconName::Cpu),
-                _ => None,
-            };
+        let tile = |icon: Option<IconName>, label: &str| {
             div()
                 .flex()
                 .flex_col()
@@ -199,10 +200,10 @@ impl Machine {
         let sub = |s: String| div().text_size(px(12.)).text_color(muted()).truncate().child(s);
 
         let (pressure, pressure_color) = match m.pressure {
-            Some(Pressure::Normal) => ("Normal", green()),
-            Some(Pressure::Warning) => ("Warning", amber()),
-            Some(Pressure::Critical) => ("Critical", red()),
-            None => ("Unknown", grey()),
+            Some(Pressure::Normal) => (t!("view.pressure.normal"), green()),
+            Some(Pressure::Warning) => (t!("view.pressure.warning"), amber()),
+            Some(Pressure::Critical) => (t!("view.pressure.critical"), red()),
+            None => (t!("view.pressure.unknown"), grey()),
         };
         let used = m.used as f32 / m.total.max(1) as f32;
         let cores = r.host.ncpu.max(1) as f32 * 100.0;
@@ -212,14 +213,16 @@ impl Machine {
             .px(px(16.))
             .py(px(12.))
             .child(
-                tile("Memory pressure")
-                    .child(div().flex().items_center().gap(px(8.)).child(dot(pressure_color).size(px(10.))).child(big(pressure.into())))
-                    .child(sub(format!("{} compressed", m.compressed.map_or("—".into(), bytes)))),
+                tile(Some(IconName::MemoryStick), &t!("view.memory_pressure"))
+                    .child(
+                        div().flex().items_center().gap(px(8.)).child(dot(pressure_color).size(px(10.))).child(big(pressure.into_owned())),
+                    )
+                    .child(sub(t!("view.compressed", size = m.compressed.map_or("—".into(), bytes)).into_owned())),
             )
             .child(
-                tile("Memory")
+                tile(Some(IconName::MemoryStick), &t!("view.memory"))
                     .child(with_trend(
-                        big(format!("{} of {}", bytes(m.used), bytes(m.total))),
+                        big(t!("view.of", used = bytes(m.used), total = bytes(m.total)).into_owned()),
                         mem_trend(m.used, p.map(|h| h.memory.used)),
                         "t-mem",
                     ))
@@ -235,21 +238,21 @@ impl Machine {
                     )),
             )
             .child(
-                tile("Swap")
+                tile(Some(IconName::MemoryStick), &t!("view.swap"))
                     .child(with_trend(
-                        big(format!("{} of {}", bytes(m.swap_used), bytes(m.swap_total))),
+                        big(t!("view.of", used = bytes(m.swap_used), total = bytes(m.swap_total)).into_owned()),
                         mem_trend(m.swap_used, p.map(|h| h.memory.swap_used)),
                         "t-swap",
                     ))
                     .child(sub(match (m.swap_in, m.swap_out) {
-                        (Some(i), Some(o)) => format!("in {} · out {}", rate(i), rate(o)),
+                        (Some(i), Some(o)) => t!("view.swap_io", swap_in = rate(i), swap_out = rate(o)).into_owned(),
                         _ => "—".into(),
                     })),
             )
             .child(
-                tile("CPU")
+                tile(Some(IconName::Cpu), &t!("view.cpu"))
                     .child(with_trend(
-                        big(format!("{} of {} cores", cpu(r.host.cpu), r.host.ncpu)),
+                        big(t!("view.cpu_of_cores", cpu = cpu(r.host.cpu), n = r.host.ncpu).into_owned()),
                         cpu_trend(r.host.cpu, p.map(|h| h.cpu)),
                         "t-cpu",
                     ))
@@ -257,12 +260,15 @@ impl Machine {
             );
         if let Some(d) = &r.docker {
             let docker = match &d.vm {
-                Some(vm) => tile("Docker VM").child(big(bytes(vm.mem))).child(sub(format!(
-                    "{} in containers · {} other",
-                    bytes(d.containers_mem),
-                    bytes(vm.other_mem)
-                ))),
-                None => tile("Docker").child(big(bytes(d.containers_mem))).child(sub(format!("{} containers", d.containers))),
+                Some(vm) => tile(None, &t!("view.docker_vm")).child(big(bytes(vm.mem))).child(sub(t!(
+                    "view.vm_split",
+                    containers = bytes(d.containers_mem),
+                    other = bytes(vm.other_mem)
+                )
+                .into_owned())),
+                None => {
+                    tile(None, "Docker").child(big(bytes(d.containers_mem))).child(sub(count("view.containers_n", d.containers as u64)))
+                }
             };
             row = row.child(docker);
         }
@@ -294,7 +300,7 @@ impl Machine {
             .track_scroll(&self.owners_scroll.handle)
             .px(px(16.))
             .pb(px(16.))
-            .child(div().pb(px(8.)).child(caption("WHO USES IT")))
+            .child(div().pb(px(8.)).child(caption(t!("view.who_uses_it").into_owned())))
             .children(owners.into_iter().take(30).map(|o| {
                 let before = self.prev.as_ref().and_then(|p| p.owners.iter().find(|x| x.kind == o.kind && x.name == o.name));
                 let icon = o.bundle.as_ref().and_then(|b| self.icons.get(b).cloned().flatten());
@@ -315,7 +321,16 @@ impl Machine {
                                     div().w(px(16.)).flex_none().flex().justify_center().child(dot(kind_color(o.kind))).into_any_element()
                                 }
                             })
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(text()).child(o.name.clone()))
+                            // "System" stays English in the data (it keys the trend and the id): only its label is translated.
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .text_color(text())
+                                    .child(if o.kind == OwnerKind::System { t!("core.system").into_owned() } else { o.name.clone() }),
+                            )
                             .child(
                                 metric(IconName::MemoryStick, bytes(o.mem), mem_trend(o.mem, before.map(|b| b.mem)), &key, r.at).w(px(92.)),
                             )
@@ -388,7 +403,14 @@ impl Machine {
                     .items_center()
                     .gap(px(8.))
                     .pl(px(16.))
-                    .child(div().flex_none().font_family(MONO).text_size(px(12.)).text_color(amber()).child(a.tool.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(MONO)
+                            .text_size(px(12.))
+                            .text_color(amber())
+                            .child(crate::state::tool_name(&a.tool).into_owned()),
+                    )
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(muted()).child(a.detail.clone()))
                     .children(cost.map(|c| num(c).text_color(amber())))
                     .when(a.since > 0, |d| {
@@ -405,11 +427,9 @@ impl Machine {
                     .items_center()
                     .gap(px(6.))
                     .pl(px(16.))
-                    .when(!s.builds.is_empty(), |d| {
-                        d.child(chip(format!("{} build{}", s.builds.len(), if s.builds.len() > 1 { "s" } else { "" }), amber()))
-                    })
+                    .when(!s.builds.is_empty(), |d| d.child(chip(count("view.builds_n", s.builds.len() as u64), amber())))
                     .when(!s.groups.is_empty(), |d| d.child(chip(docker_line, cyan())))
-                    .when(no_limit > 0, |d| d.child(chip("no limit", red()))),
+                    .when(no_limit > 0, |d| d.child(chip(t!("view.no_limit").into_owned(), red()))),
             );
         }
         let clicks = self.clicks.get(&s.id).copied().unwrap_or(0);
@@ -434,12 +454,12 @@ impl Machine {
     fn details(&self, s: &SessionView) -> Div {
         let mut d = div().flex().flex_col().gap(px(4.)).mt(px(6.)).pt(px(8.)).border_t_1().border_color(line());
         for b in &s.builds {
-            let what = b.container.as_ref().map_or(String::new(), |c| format!("in {c} · "));
+            let what = b.container.as_ref().map_or(String::new(), |c| format!("{} · ", t!("view.in_container", name = c)));
             d = d.child(
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(chip("build", amber()))
+                    .child(chip(t!("view.build").into_owned(), amber()))
                     .child(div().flex_1().min_w_0().truncate().font_family(MONO).text_size(px(12.)).child(format!("{what}{}", b.cmd)))
                     .child(num(bytes(b.mem)))
                     .child(num(cpu(b.cpu)).text_color(muted())),
@@ -475,7 +495,7 @@ impl Machine {
             );
         }
         if s.more > 0 {
-            d = d.child(div().text_size(px(11.)).text_color(faint()).child(format!("and {} more processes", s.more)));
+            d = d.child(div().text_size(px(11.)).text_color(faint()).child(count("view.more_processes", s.more as u64)));
         }
         d
     }
@@ -497,10 +517,10 @@ impl Machine {
             .track_scroll(&self.sessions_scroll.handle)
             .pr(px(16.))
             .pb(px(16.))
-            .child(caption(format!("SESSIONS · {}", r.sessions.len())))
+            .child(caption(t!("view.sessions_caption", n = r.sessions.len()).into_owned()))
             .children(sessions.into_iter().map(|s| self.session(s, cx)))
             .when(!r.unattached.is_empty(), |d| {
-                d.child(div().pt(px(12.)).child(caption("CONTAINERS NO SESSION OWNS"))).children(
+                d.child(div().pt(px(12.)).child(caption(t!("view.unattached").into_owned()))).children(
                     r.unattached
                         .iter()
                         .map(|g| div().p(px(12.)).rounded(px(10.)).bg(panel()).border_1().border_color(line()).child(group(g))),
@@ -576,10 +596,10 @@ fn details_height(s: &SessionView) -> f32 {
 
 fn group(g: &GroupView) -> Div {
     let why = match (g.why, g.shared) {
-        (Some("client"), _) => "its docker command".to_string(),
-        (Some(_), _) => g.dir.clone().map_or("its folder".into(), |d| format!("mounts {d}")),
-        (None, n) if n > 0 => format!("{n} sessions work in its folders"),
-        _ => "nothing points to a session".into(),
+        (Some("client"), _) => t!("view.why.client").into_owned(),
+        (Some(_), _) => g.dir.as_ref().map_or(t!("view.why.folder"), |d| t!("view.why.mounts", dir = d)).into_owned(),
+        (None, n) if n > 0 => count("view.why.shared", n as u64),
+        _ => t!("view.why.none").into_owned(),
     };
     div()
         .flex()
@@ -601,10 +621,12 @@ fn group(g: &GroupView) -> Div {
 
 fn container(c: &ContainerView) -> Div {
     let limits = if c.unlimited {
-        chip("no limit", red())
+        chip(t!("view.no_limit").into_owned(), red())
     } else {
-        let cpus = if c.cpus > 0.0 { format!("{} CPU", c.cpus) } else { "any CPU".into() };
-        let mem = if c.mem_limit > 0 { bytes(c.mem_limit) } else { "any RAM".into() };
+        // Docker's CPU count keeps its own decimals (1.5, 0.25); only the decimal mark changes.
+        let n = c.cpus.to_string().replace('.', &t!("number.decimal"));
+        let cpus = if c.cpus > 0.0 { t!("view.cpus", n = n) } else { t!("view.any_cpu") };
+        let mem = if c.mem_limit > 0 { bytes(c.mem_limit) } else { t!("view.any_ram").into_owned() };
         chip(format!("{cpus} · {mem}"), muted())
     };
     div()
@@ -632,7 +654,7 @@ impl Render for Machine {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.));
         let Some(r) = self.report.clone() else {
-            return root.items_center().justify_center().child(div().text_color(muted()).child("Reading the machine…"));
+            return root.items_center().justify_center().child(div().text_color(muted()).child(t!("view.loading").into_owned()));
         };
         #[cfg(feature = "snapshot")]
         self.snapshot(&r, window, cx);

@@ -4,6 +4,7 @@ use crate::docker::{COMPOSE_DIR, COMPOSE_FILES, COMPOSE_PROJECT, Container, Dock
 use crate::host::{Host, Proc};
 use crate::sessions::{Activity, SessionMeta};
 use crate::text::{add_dirs, is_claude, is_docker_cli, is_heavy, is_shown_build, readable, redact, resume_of, short_program};
+use rust_i18n::t;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -161,7 +162,7 @@ pub struct ProcRow {
 
 #[derive(Debug, Serialize)]
 pub struct GroupView {
-    /// "Container", "Compose" or "Kubernetes".
+    /// "Container" (in the window's language), "Compose" or "Kubernetes".
     pub kind: String,
     pub name: String,
     /// How it was attached: "client" (a session's docker command names it) or "folder" (a session's folder holds it).
@@ -244,7 +245,7 @@ pub fn group_containers(containers: Vec<Container>) -> Vec<Group> {
         let label = GROUP_LABELS.iter().find_map(|(l, kind)| c.labels.get(*l).map(|v| (*kind, v.clone())));
         let key = label.as_ref().map_or_else(|| c.id.clone(), |(kind, v)| format!("{kind}:{v}"));
         let i = *index.entry(key).or_insert_with(|| {
-            let (kind, name) = label.clone().unwrap_or(("Container", c.name.clone()));
+            let (kind, name) = label.clone().map_or_else(|| (t!("core.container"), c.name.clone()), |(k, n)| (k.into(), n));
             groups.push(Group {
                 kind: kind.into(),
                 name,

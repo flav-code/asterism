@@ -3,6 +3,8 @@ use crate::ui::*;
 use asterism_core::graph::{Graph, Node, NodeKind};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 pub const PALETTE: [u32; 8] = [0x7c9cff, 0xff9f6b, 0xe879f9, 0xa3e635, 0x2dd4bf, 0xfacc15, 0xfda4af, 0x93c5fd];
@@ -131,21 +133,21 @@ pub fn project_colors(g: &Graph) -> HashMap<String, Rgba> {
 }
 
 /// What a session or subagent is doing, in a few words.
-pub fn state_of(n: &Node) -> &'static str {
+pub fn state_of(n: &Node) -> Cow<'static, str> {
     match n.kind {
         NodeKind::Agent => {
             if n.live {
-                "running"
+                t!("state.running")
             } else {
-                "done"
+                t!("state.done")
             }
         }
-        NodeKind::Remote => "on another machine",
-        NodeKind::Ghost => "not on this Mac anymore",
-        _ if working(n) => "working",
-        _ if n.live => "idle · open",
-        _ if n.archived => "archived",
-        _ => "closed",
+        NodeKind::Remote => t!("state.remote"),
+        NodeKind::Ghost => t!("state.gone"),
+        _ if working(n) => t!("state.working"),
+        _ if n.live => t!("state.idle_open"),
+        _ if n.archived => t!("state.archived"),
+        _ => t!("state.closed"),
     }
 }
 
@@ -155,8 +157,22 @@ pub fn node_tip(n: &Node, pos: Point<Pixels>, now: u64) -> Div {
     let ago_s = now.saturating_sub(n.last_at) / 1000;
     tip_card(pos)
         .child(div().font_weight(FontWeight::SEMIBOLD).child(clip(&n.title, 70)))
-        .child(div().text_size(px(12.0)).text_color(muted()).child(format!("{kind}{} · {} · {} ago", state_of(n), n.project, ago(ago_s))))
+        .child(div().text_size(px(12.0)).text_color(muted()).child(format!(
+            "{kind}{} · {} · {}",
+            state_of(n),
+            n.project,
+            t!("ui.ago", time = ago(ago_s))
+        )))
         .children(n.now.as_ref().filter(|_| working(n)).map(|m| {
-            div().font_family(MONO).text_size(px(11.0)).text_color(amber()).child(clip(&format!("{} · {}", m.tool, m.detail), 90))
+            div()
+                .font_family(MONO)
+                .text_size(px(11.0))
+                .text_color(amber())
+                .child(clip(&format!("{} · {}", tool_name(&m.tool), m.detail), 90))
         }))
+}
+
+/// A session's last move as shown: its tool's name, or "reply" (a text answer) in this language.
+pub fn tool_name(tool: &str) -> Cow<'_, str> {
+    if tool == "reply" { t!("state.reply").into_owned().into() } else { tool.into() }
 }

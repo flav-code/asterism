@@ -20,6 +20,8 @@ mod ui;
 mod update;
 mod view;
 
+rust_i18n::i18n!("../../locales", fallback = "en");
+
 use asterism_core::desktop::DesktopStore;
 use asterism_core::graph::{UsageView, Visualizer};
 use asterism_core::{Monitor, Report};
@@ -83,6 +85,7 @@ fn main() {
         #[cfg(not(feature = "snapshot"))]
         settings::move_old_data();
         cx.set_global(settings::Settings::load());
+        settings::apply_language(cx);
         // The inputs and other components follow the window's dark palette, not the system's light one.
         gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
         // Snapshot builds can open at another size (MDB_WINDOW=900x700), to check the layout narrow.

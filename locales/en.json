@@ -1,0 +1,344 @@
+{
+  "language": {
+    "button": "Language",
+    "system": "System (%{name})"
+  },
+  "number": {
+    "decimal": ".",
+    "percent": "%{n}%"
+  },
+  "date": {
+    "days_from_sunday": "Sun Mon Tue Wed Thu Fri Sat",
+    "months": "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec"
+  },
+  "shell": {
+    "search": "Search   /",
+    "tab": {
+      "map": "Map",
+      "timeline": "Timeline",
+      "usage": "Usage",
+      "machine": "Machine"
+    },
+    "range": {
+      "6h": "6h",
+      "24h": "24h",
+      "3d": "3d",
+      "7d": "7d",
+      "14d": "14d",
+      "30d": "30d",
+      "all": "All"
+    },
+    "stats": {
+      "sessions": {
+        "one": "session",
+        "other": "sessions"
+      },
+      "messages": {
+        "one": "message",
+        "other": "messages"
+      },
+      "subagents": {
+        "one": "subagent",
+        "other": "subagents"
+      }
+    },
+    "all_projects": "All projects",
+    "archived": "Archived",
+    "subagents": "Subagents",
+    "replay": "▶ Replay",
+    "stop": "■ Stop",
+    "reading_history": "Reading history",
+    "history_read": "History read",
+    "update": {
+      "downloading": "Downloading v%{version}… %{percent}%",
+      "ready": "Update ready · v%{version}",
+      "click_to_restart": "Click to restart and update.",
+      "installs_on_click": "It installs when you click the green arrow."
+    },
+    "feed": {
+      "title": "LIVE FEED",
+      "waiting": "Waiting for sessions to talk…",
+      "report": "report · %{text}",
+      "started_working": "started working",
+      "finished": "finished its turn",
+      "new_session": "new session",
+      "subagent": "spawned subagent · %{name}"
+    },
+    "empty": {
+      "no_match": "No session matches “%{query}”",
+      "none_in_project": "No session in %{project} for this range",
+      "none": "No session in this range",
+      "clear_search": "Clear search",
+      "show_all": "Show all"
+    }
+  },
+  "core": {
+    "untitled_session": "Untitled session",
+    "cli_session": "CLI session",
+    "cli_session_pid": "CLI session · pid %{pid}",
+    "remote_control_session": "Remote Control session",
+    "container": "Container",
+    "system": "System"
+  },
+  "dash": {
+    "loading": "Reading your transcripts…",
+    "title": "Token usage",
+    "usd": "$%{n}",
+    "thousands_sep": ",",
+    "thousands": "%{n}K",
+    "millions": "%{n}M",
+    "billions": "%{n}B",
+    "other_model": "Other",
+    "metric": {
+      "usd": "API value",
+      "out": "Output tokens",
+      "all": "All tokens",
+      "replies": "Replies"
+    },
+    "metric_button": {
+      "usd": "Value $",
+      "out": "Output",
+      "all": "All tokens",
+      "replies": "Replies"
+    },
+    "range": {
+      "today": "Today",
+      "7d": "7d",
+      "30d": "30d",
+      "90d": "90d",
+      "all": "All"
+    },
+    "tile": {
+      "value": "API-equivalent value",
+      "value_sub": "at Anthropic API prices, not what you pay",
+      "processed": "Tokens processed",
+      "processed_sub": "%{pct} read from cache",
+      "output": "Output tokens",
+      "output_sub": "written by Claude",
+      "cache": "Cache hit rate",
+      "cache_sub": "saved ≈ %{usd} vs no cache",
+      "replies": "Replies",
+      "subagents": "Subagents",
+      "subagents_sub": "of the value"
+    },
+    "sessions_n": {
+      "one": "%{n} session",
+      "other": "%{n} sessions"
+    },
+    "replies_n": {
+      "one": "%{n} reply",
+      "other": "%{n} replies"
+    },
+    "days_n": {
+      "one": "%{n} day",
+      "other": "%{n} days"
+    },
+    "now": "now",
+    "today": "today",
+    "per_day": "%{metric} per day",
+    "per_hour": "%{metric} per hour",
+    "live_rate": "%{n} tok/min",
+    "live_sub": "output, last 10 min · %{usd} in the last hour",
+    "two_hours_ago": "−2 h",
+    "fewer": "fewer",
+    "more": "more",
+    "out": "%{n} out",
+    "output_n": "%{n} output",
+    "subagents_usd": "%{usd} subagents",
+    "empty": "Nothing in this range.",
+    "card": {
+      "live": "Last 2 hours",
+      "heat": "When you work",
+      "heat_sub": "replies per weekday and hour",
+      "models": "By model",
+      "models_sub": "share of the value",
+      "sessions": "Top sessions",
+      "sessions_sub": "click to open on the map",
+      "tools": "Most used tools",
+      "all_time": "all time",
+      "records": "Records"
+    },
+    "fact": {
+      "busiest": "Busiest day",
+      "streak": "Streak",
+      "streak_sub": "in a row with Claude at work",
+      "since": "Since",
+      "since_sub": "first reply %{date}",
+      "average": "Daily average",
+      "average_sub": "%{n} output tokens a day",
+      "longest": "Longest reply",
+      "tokens": "%{n} tokens",
+      "all_time": "All time",
+      "all_time_sub": "%{n} output tokens"
+    },
+    "not_priced": "Not priced: %{models}.",
+    "footer": "Value = what these tokens would cost on the Anthropic API (public prices of 6 Oct 2026: input, output, cache writes at 1.25× or 2×, cache reads). A subscription isn't billed this way; it shows how much work went through.%{unpriced}"
+  },
+  "map": {
+    "loading": "Reading the sessions…",
+    "titles": {
+      "label": "Titles",
+      "hover": "Hover",
+      "open": "Open",
+      "all": "All"
+    },
+    "legend": {
+      "working": "working",
+      "idle": "open, idle",
+      "closed": "closed",
+      "remote": "other machine",
+      "started": "started",
+      "forked": "forked",
+      "message": "message",
+      "report": "report back",
+      "subagent": "subagent"
+    }
+  },
+  "panel": {
+    "overview": {
+      "title": "Right now",
+      "open_count": {
+        "one": "open session",
+        "other": "open sessions"
+      },
+      "working": "working",
+      "agents_count": {
+        "one": "subagent running",
+        "other": "subagents running"
+      },
+      "open": "Open sessions",
+      "none_open": "No Claude session is open.",
+      "talkative": "Most talkative · %{range}",
+      "no_talk": "No messages between sessions in this range.",
+      "all_time": "all time",
+      "days": {
+        "one": "%{n} day",
+        "other": "%{n} days"
+      },
+      "sent": {
+        "one": "%{n} sent",
+        "other": "%{n} sent"
+      }
+    },
+    "kind": {
+      "subagent": "subagent",
+      "terminal": "terminal",
+      "desktop": "desktop",
+      "remote": "remote",
+      "gone": "gone"
+    },
+    "chip": {
+      "scheduled": "⏱ scheduled",
+      "archived": "archived"
+    },
+    "field": {
+      "started": "Started",
+      "last_active": "Last active",
+      "turns": "Turns",
+      "tokens": "Tokens",
+      "process": "Process",
+      "parent": "Parent",
+      "pull_requests": "Pull requests"
+    },
+    "tokens_value": "%{total} · %{output} output · ≈ %{cost}",
+    "now_tool": "NOW",
+    "last_tool": "LAST",
+    "ago": "%{time} ago",
+    "back": "← Overview",
+    "forked_from": "Forked from",
+    "started_by": "Started by",
+    "kids": "Sessions it started · %{n}",
+    "messages": "Messages · %{n}",
+    "no_messages": "No messages to or from other sessions.",
+    "subagents": "Subagents · %{n}",
+    "msg": {
+      "report": "report ·",
+      "failed": "failed ·"
+    }
+  },
+  "state": {
+    "running": "running",
+    "done": "done",
+    "remote": "on another machine",
+    "gone": "not on this Mac anymore",
+    "working": "working",
+    "idle_open": "idle · open",
+    "archived": "archived",
+    "closed": "closed",
+    "reply": "reply"
+  },
+  "timeline": {
+    "loading": "Reading the sessions…",
+    "rows": {
+      "one": "%{n} session · newest at top",
+      "other": "%{n} sessions · newest at top"
+    },
+    "tip": {
+      "report": "Report",
+      "message": "Message",
+      "failed": "failed"
+    }
+  },
+  "ui": {
+    "gb": "%{n} GB",
+    "mb": "%{n} MB",
+    "kb_s": "%{n} KB/s",
+    "mb_s": "%{n} MB/s",
+    "days": "%{n} d",
+    "ago": "%{time} ago"
+  },
+  "view": {
+    "loading": "Reading the machine…",
+    "title": "Who uses this machine",
+    "updated": "updated %{ago} ago",
+    "sort_by": "Sort by",
+    "sort_ram": "RAM",
+    "cpu": "CPU",
+    "memory_pressure": "Memory pressure",
+    "pressure": {
+      "normal": "Normal",
+      "warning": "Warning",
+      "critical": "Critical",
+      "unknown": "Unknown"
+    },
+    "compressed": "%{size} compressed",
+    "memory": "Memory",
+    "of": "%{used} of %{total}",
+    "swap": "Swap",
+    "swap_io": "in %{swap_in} · out %{swap_out}",
+    "cpu_of_cores": "%{cpu} of %{n} cores",
+    "docker_vm": "Docker VM",
+    "vm_split": "%{containers} in containers · %{other} other",
+    "containers_n": {
+      "one": "%{n} container",
+      "other": "%{n} containers"
+    },
+    "who_uses_it": "WHO USES IT",
+    "builds_n": {
+      "one": "%{n} build",
+      "other": "%{n} builds"
+    },
+    "build": "build",
+    "no_limit": "no limit",
+    "in_container": "in %{name}",
+    "more_processes": {
+      "one": "and %{n} more process",
+      "other": "and %{n} more processes"
+    },
+    "sessions_caption": "SESSIONS · %{n}",
+    "unattached": "CONTAINERS NO SESSION OWNS",
+    "why": {
+      "client": "its docker command",
+      "folder": "its folder",
+      "mounts": "mounts %{dir}",
+      "shared": {
+        "one": "%{n} session works in its folders",
+        "other": "%{n} sessions work in its folders"
+      },
+      "none": "nothing points to a session"
+    },
+    "cpus": "%{n} CPU",
+    "any_cpu": "any CPU",
+    "any_ram": "any RAM"
+  }
+}

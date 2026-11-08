@@ -5,8 +5,10 @@ use crate::state::{Filters, is_session, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
+use asterism_core::i18n;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -174,9 +176,9 @@ impl Panel {
         talk.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         talk.truncate(6);
         let range = match self.range_h {
-            None => "all time".to_string(),
+            None => t!("panel.overview.all_time").to_string(),
             Some(h) if h < 48.0 => format!("{h} h"),
-            Some(h) => format!("{} days", h / 24.0),
+            Some(h) => i18n::count("panel.overview.days", (h / 24.0) as u64), // the ranges are whole days
         };
         let open = live
             .iter()
@@ -192,7 +194,7 @@ impl Panel {
                                 .font_family(MONO)
                                 .text_size(px(11.0))
                                 .text_color(if working(n) { amber() } else { faint() })
-                                .child(m.tool.clone()),
+                                .child(crate::state::tool_name(&m.tool).into_owned()),
                         )
                         .child(div().min_w_0().child(clip(&m.detail, 90))),
                     None => div().child(n.project.clone()),
@@ -200,29 +202,31 @@ impl Panel {
                 item(&n.id, self.dot(n, 10.0), n.title.clone(), ago(now.saturating_sub(when) / 1000), Some(sum.into_any_element()), cx)
             })
             .collect::<Vec<_>>();
-        let talkers =
-            talk.iter().map(|(id, c)| item(id, arrow("↗", blue()), self.title(g, id), format!("{c} sent"), None, cx)).collect::<Vec<_>>();
+        let talkers = talk
+            .iter()
+            .map(|(id, c)| item(id, arrow("↗", blue()), self.title(g, id), i18n::count("panel.overview.sent", *c as u64), None, cx))
+            .collect::<Vec<_>>();
         vec![
             pane()
-                .child(h4("Right now"))
+                .child(h4(&t!("panel.overview.title")))
                 .child(
                     div()
                         .flex()
                         .gap(px(8.0))
-                        .child(big(live.len(), "open sessions", text()))
-                        .child(big(busy, "working", amber()))
-                        .child(big(agents, "subagents running", text())),
+                        .child(big(live.len(), &i18n::count("panel.overview.open_count", live.len() as u64), text()))
+                        .child(big(busy, &t!("panel.overview.working"), amber()))
+                        .child(big(agents, &i18n::count("panel.overview.agents_count", agents as u64), text())),
                 )
                 .into_any_element(),
             pane()
-                .child(h4("Open sessions"))
+                .child(h4(&t!("panel.overview.open")))
                 .children(open)
-                .when(live.is_empty(), |p| p.child(empty("No Claude session is open.")))
+                .when(live.is_empty(), |p| p.child(empty(&t!("panel.overview.none_open"))))
                 .into_any_element(),
             pane()
-                .child(h4(&format!("Most talkative · {range}")))
+                .child(h4(&t!("panel.overview.talkative", range = range)))
                 .children(talkers)
-                .when(talk.is_empty(), |p| p.child(empty("No messages between sessions in this range.")))
+                .when(talk.is_empty(), |p| p.child(empty(&t!("panel.overview.no_talk"))))
                 .into_any_element(),
         ]
     }
@@ -250,11 +254,11 @@ impl Panel {
         kids.sort_by_key(|x| std::cmp::Reverse(x.created_at));
 
         let kind = match n.kind {
-            NodeKind::Agent => n.agent_type.clone().unwrap_or_else(|| "subagent".into()),
-            NodeKind::Cli => "terminal".into(),
-            NodeKind::Desktop => "desktop".into(),
-            NodeKind::Remote => "remote".into(),
-            NodeKind::Ghost => "gone".into(),
+            NodeKind::Agent => n.agent_type.clone().unwrap_or_else(|| t!("panel.kind.subagent").into()),
+            NodeKind::Cli => t!("panel.kind.terminal").into(),
+            NodeKind::Desktop => t!("panel.kind.desktop").into(),
+            NodeKind::Remote => t!("panel.kind.remote").into(),
+            NodeKind::Ghost => t!("panel.kind.gone").into(),
         };
         let chips = [
             Some(kind),
@@ -262,41 +266,35 @@ impl Panel {
             n.profile.clone(),
             n.model.as_ref().map(|m| m.trim_start_matches("claude-").to_string()),
             n.branch.clone(),
-            n.scheduled.then(|| "⏱ scheduled".to_string()),
-            n.archived.then(|| "archived".to_string()),
+            n.scheduled.then(|| t!("panel.chip.scheduled").to_string()),
+            n.archived.then(|| t!("panel.chip.archived").to_string()),
         ];
-        let mut kv: Vec<(&str, AnyElement)> = vec![
-            ("Started", text_el(if n.created_at > 0 { when(n.created_at) } else { "—".into() })),
+        let mut kv: Vec<(String, AnyElement)> = vec![
+            (t!("panel.field.started").to_string(), text_el(if n.created_at > 0 { when(n.created_at) } else { "—".into() })),
             (
-                "Last active",
+                t!("panel.field.last_active").to_string(),
                 text_el(if n.last_at > 0 {
-                    format!("{} · {} ago", when(n.last_at), ago(now.saturating_sub(n.last_at) / 1000))
+                    format!("{} · {}", when(n.last_at), t!("panel.ago", time = ago(now.saturating_sub(n.last_at) / 1000)))
                 } else {
                     "—".into()
                 }),
             ),
         ];
         if n.turns > 0 {
-            kv.push(("Turns", text_el(n.turns.to_string())));
+            kv.push((t!("panel.field.turns").to_string(), text_el(n.turns.to_string())));
         }
         if let Some(t) = n.tok {
-            kv.push((
-                "Tokens",
-                text_el(format!(
-                    "{} · {} output · ≈ {}",
-                    crate::dash::short(t.t as f64),
-                    crate::dash::short(t.o as f64),
-                    crate::dash::usd(t.usd)
-                )),
-            ));
+            let (total, output, cost) = (crate::dash::short(t.t as f64), crate::dash::short(t.o as f64), crate::dash::usd(t.usd));
+            let value = t!("panel.tokens_value", total = total, output = output, cost = cost).to_string();
+            kv.push((t!("panel.field.tokens").to_string(), text_el(value)));
         }
         if let Some(pid) = n.pid {
-            kv.push(("Process", text_el(format!("pid {pid}"))));
+            kv.push((t!("panel.field.process").to_string(), text_el(format!("pid {pid}"))));
         }
         if let Some(p) = n.parent.clone() {
             let label = clip(&self.title(g, &p), 40);
             kv.push((
-                "Parent",
+                t!("panel.field.parent").to_string(),
                 div()
                     .id("parent")
                     .text_color(blue())
@@ -317,7 +315,10 @@ impl Panel {
                     .child(format!("{repo}#{}", p.n))
                     .on_click(move |_, _, cx| cx.open_url(&url))
             });
-            kv.push(("Pull requests", div().flex().flex_wrap().gap(px(8.0)).children(links).into_any_element()));
+            kv.push((
+                t!("panel.field.pull_requests").to_string(),
+                div().flex().flex_wrap().gap(px(8.0)).children(links).into_any_element(),
+            ));
         }
         let now_card = n.now.as_ref().map(|m| {
             let busy = working(n);
@@ -337,11 +338,14 @@ impl Panel {
                         .items_center()
                         .child(div().font_family(MONO).text_size(px(11.0)).text_color(if busy { amber() } else { muted() }).child(format!(
                             "{} · {}",
-                            if busy { "NOW" } else { "LAST" },
-                            m.tool
+                            if busy { t!("panel.now_tool") } else { t!("panel.last_tool") },
+                            crate::state::tool_name(&m.tool)
                         )))
                         .child(
-                            div().text_size(px(11.0)).text_color(faint()).child(format!("{} ago", ago(now.saturating_sub(m.ts) / 1000))),
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(faint())
+                                .child(t!("panel.ago", time = ago(now.saturating_sub(m.ts) / 1000)).to_string()),
                         ),
                 )
                 .child(div().mt(px(4.0)).child(m.detail.clone()))
@@ -355,7 +359,7 @@ impl Panel {
                     .text_color(muted())
                     .cursor_pointer()
                     .hover(|s| s.text_color(text()))
-                    .child("← Overview")
+                    .child(t!("panel.back").to_string())
                     .on_click(cx.listener(|v, _, _, cx| v.go(None, cx))),
             )
             .child(
@@ -374,10 +378,11 @@ impl Panel {
                     .children(chips.into_iter().flatten().map(|c| chip(c, muted()).bg(panel_hi()))),
             )
             .child(div().flex().flex_col().gap(px(6.0)).mt(px(12.0)).text_size(px(12.0)).children(kv.into_iter().map(|(k, v)| {
+                // Wide enough for the French "Dernière activité".
                 div()
                     .flex()
                     .gap(px(10.0))
-                    .child(div().w(px(92.0)).flex_none().text_color(faint()).child(k))
+                    .child(div().w(px(112.0)).flex_none().text_color(faint()).child(k))
                     .child(div().flex_1().min_w_0().child(v))
             })))
             .children(now_card);
@@ -386,25 +391,25 @@ impl Panel {
         };
         let mut panes = vec![head.into_any_element()];
         if let Some((k, _)) = parents.first() {
-            let title = if *k == EdgeKind::Fork { "Forked from" } else { "Started by" };
+            let title = if *k == EdgeKind::Fork { t!("panel.forked_from") } else { t!("panel.started_by") };
             let rows: Vec<AnyElement> = parents.iter().map(|(_, p)| link(p, None, cx)).collect();
-            panes.push(pane().child(h4(title)).children(rows).into_any_element());
+            panes.push(pane().child(h4(&title)).children(rows).into_any_element());
         }
         if !kids.is_empty() {
             let rows: Vec<AnyElement> = kids.iter().map(|k| link(k, None, cx)).collect();
-            panes.push(pane().child(h4(&format!("Sessions it started · {}", kids.len()))).children(rows).into_any_element());
+            panes.push(pane().child(h4(&t!("panel.kids", n = kids.len()))).children(rows).into_any_element());
         }
         let messages: Vec<AnyElement> = msgs.iter().map(|&m| self.message(g, n, m, cx)).collect();
         panes.push(
             pane()
-                .child(h4(&format!("Messages · {}", msgs.len())))
+                .child(h4(&t!("panel.messages", n = msgs.len())))
                 .children(messages)
-                .when(msgs.is_empty(), |p| p.child(empty("No messages to or from other sessions.")))
+                .when(msgs.is_empty(), |p| p.child(empty(&t!("panel.no_messages"))))
                 .into_any_element(),
         );
         if !agents.is_empty() {
             let rows: Vec<AnyElement> = agents.iter().map(|a| link(a, a.agent_type.clone(), cx)).collect();
-            panes.push(pane().child(h4(&format!("Subagents · {}", agents.len()))).children(rows).into_any_element());
+            panes.push(pane().child(h4(&t!("panel.subagents", n = agents.len()))).children(rows).into_any_element());
         }
         panes
     }
@@ -496,10 +501,22 @@ impl Panel {
                             .flex()
                             .gap(px(4.0))
                             .when(msg.kind == MsgKind::Report, |d| {
-                                d.child(div().flex_none().text_color(green()).font_weight(FontWeight::MEDIUM).child("report ·"))
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(green())
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(t!("panel.msg.report").to_string()),
+                                )
                             })
                             .when(failed, |d| {
-                                d.child(div().flex_none().text_color(red()).font_weight(FontWeight::MEDIUM).child("failed ·"))
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(red())
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(t!("panel.msg.failed").to_string()),
+                                )
                             })
                             .child(div().flex_1().min_w_0().child(summary)),
                     )

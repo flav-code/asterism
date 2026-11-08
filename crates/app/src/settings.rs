@@ -1,5 +1,7 @@
 //! Choices that survive a restart: the tab, range and filters, map titles, the side panel and the feed, the usage
-//! range and metric. Saved as JSON next to the map's positions. Snapshot builds neither read nor write them.
+//! range and metric, the language. Saved as JSON next to the map's positions. Snapshot builds neither read nor write
+//! them.
+use asterism_core::i18n;
 use gpui_kit::*;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -16,6 +18,8 @@ pub struct Settings {
     pub feed: bool,
     pub usage_range: String,
     pub usage_metric: String,
+    /// A code from `i18n::LANGUAGES`; none follows the system's language.
+    pub language: Option<String>,
 }
 
 impl Global for Settings {}
@@ -33,6 +37,7 @@ impl Default for Settings {
             feed: true,
             usage_range: "30d".into(),
             usage_metric: "usd".into(),
+            language: None,
         }
     }
 }
@@ -81,6 +86,7 @@ impl Settings {
             feed: b("feed", d.feed),
             usage_range: s("usage_range", &d.usage_range),
             usage_metric: s("usage_metric", &d.usage_metric),
+            language: v.get("language").and_then(Value::as_str).filter(|l| i18n::LANGUAGES.iter().any(|(c, _)| c == l)).map(str::to_string),
         }
     }
 
@@ -91,7 +97,7 @@ impl Settings {
         let v = json!({
             "tab": self.tab, "range": self.range, "project": self.project, "archived": self.archived, "agents": self.agents,
             "map_titles": self.titles, "panel": self.panel, "feed": self.feed,
-            "usage_range": self.usage_range, "usage_metric": self.usage_metric,
+            "usage_range": self.usage_range, "usage_metric": self.usage_metric, "language": self.language,
         });
         let dir = data_dir();
         // A lost setting is only a default next time: no need to bother anyone with an error.
@@ -109,4 +115,27 @@ pub fn change(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     if *s != before {
         s.save();
     }
+}
+
+/// The language the system asks for, among those there is a file for (English if none). Snapshot builds take
+/// MDB_LANG instead, English by default, so their pictures don't depend on the machine.
+pub fn system_language() -> &'static str {
+    if cfg!(feature = "snapshot") {
+        return i18n::pick(std::env::var("MDB_LANG").ok().as_deref());
+    }
+    let wanted: Vec<String> = sys_locale::get_locales().collect();
+    i18n::pick(wanted.iter().map(String::as_str))
+}
+
+/// Shows the window in the chosen language (or the system's), from now on and at the next launch.
+pub fn set_language(cx: &mut App, language: Option<String>) {
+    change(cx, |s| s.language = language);
+    apply_language(cx);
+}
+
+/// Sets the language the settings ask for and draws the windows again in it.
+pub fn apply_language(cx: &mut App) {
+    let lang = cx.global::<Settings>().language.clone();
+    i18n::set(lang.as_deref().unwrap_or_else(|| system_language()));
+    cx.refresh_windows();
 }

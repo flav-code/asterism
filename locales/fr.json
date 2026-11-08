@@ -1,0 +1,344 @@
+{
+  "language": {
+    "button": "Langue",
+    "system": "Système (%{name})"
+  },
+  "number": {
+    "decimal": ",",
+    "percent": "%{n} %"
+  },
+  "date": {
+    "days_from_sunday": "dim. lun. mar. mer. jeu. ven. sam.",
+    "months": "janv. févr. mars avr. mai juin juil. août sept. oct. nov. déc."
+  },
+  "shell": {
+    "search": "Rechercher   /",
+    "tab": {
+      "map": "Carte",
+      "timeline": "Chronologie",
+      "usage": "Consommation",
+      "machine": "Machine"
+    },
+    "range": {
+      "6h": "6 h",
+      "24h": "24 h",
+      "3d": "3 j",
+      "7d": "7 j",
+      "14d": "14 j",
+      "30d": "30 j",
+      "all": "Tout"
+    },
+    "stats": {
+      "sessions": {
+        "one": "session",
+        "other": "sessions"
+      },
+      "messages": {
+        "one": "message",
+        "other": "messages"
+      },
+      "subagents": {
+        "one": "sous-agent",
+        "other": "sous-agents"
+      }
+    },
+    "all_projects": "Tous les projets",
+    "archived": "Archivées",
+    "subagents": "Sous-agents",
+    "replay": "▶ Rejouer",
+    "stop": "■ Arrêter",
+    "reading_history": "Lecture de l'historique",
+    "history_read": "Historique lu",
+    "update": {
+      "downloading": "Téléchargement de la v%{version}… %{percent} %",
+      "ready": "Mise à jour prête · v%{version}",
+      "click_to_restart": "Cliquez pour redémarrer et mettre à jour.",
+      "installs_on_click": "Elle s'installe quand vous cliquez sur la flèche verte."
+    },
+    "feed": {
+      "title": "FIL EN DIRECT",
+      "waiting": "En attente des sessions…",
+      "report": "compte rendu · %{text}",
+      "started_working": "s'est mise au travail",
+      "finished": "a fini son tour",
+      "new_session": "nouvelle session",
+      "subagent": "a lancé un sous-agent · %{name}"
+    },
+    "empty": {
+      "no_match": "Aucune session ne correspond à « %{query} »",
+      "none_in_project": "Aucune session dans %{project} sur cette période",
+      "none": "Aucune session sur cette période",
+      "clear_search": "Effacer la recherche",
+      "show_all": "Tout afficher"
+    }
+  },
+  "core": {
+    "untitled_session": "Session sans titre",
+    "cli_session": "Session CLI",
+    "cli_session_pid": "Session CLI · pid %{pid}",
+    "remote_control_session": "Session Remote Control",
+    "container": "Conteneur",
+    "system": "Système"
+  },
+  "dash": {
+    "loading": "Lecture de vos transcriptions…",
+    "title": "Consommation de jetons",
+    "usd": "%{n} $",
+    "thousands_sep": " ",
+    "thousands": "%{n} k",
+    "millions": "%{n} M",
+    "billions": "%{n} Md",
+    "other_model": "Autre",
+    "metric": {
+      "usd": "Valeur API",
+      "out": "Jetons en sortie",
+      "all": "Tous les jetons",
+      "replies": "Réponses"
+    },
+    "metric_button": {
+      "usd": "Valeur $",
+      "out": "Sortie",
+      "all": "Tous les jetons",
+      "replies": "Réponses"
+    },
+    "range": {
+      "today": "Aujourd'hui",
+      "7d": "7 j",
+      "30d": "30 j",
+      "90d": "90 j",
+      "all": "Tout"
+    },
+    "tile": {
+      "value": "Valeur équivalente API",
+      "value_sub": "aux prix de l'API Anthropic, pas ce que vous payez",
+      "processed": "Jetons traités",
+      "processed_sub": "%{pct} lus dans le cache",
+      "output": "Jetons en sortie",
+      "output_sub": "écrits par Claude",
+      "cache": "Taux de succès du cache",
+      "cache_sub": "≈ %{usd} économisés vs sans cache",
+      "replies": "Réponses",
+      "subagents": "Sous-agents",
+      "subagents_sub": "de la valeur"
+    },
+    "sessions_n": {
+      "one": "%{n} session",
+      "other": "%{n} sessions"
+    },
+    "replies_n": {
+      "one": "%{n} réponse",
+      "other": "%{n} réponses"
+    },
+    "days_n": {
+      "one": "%{n} jour",
+      "other": "%{n} jours"
+    },
+    "now": "maintenant",
+    "today": "aujourd'hui",
+    "per_day": "%{metric} par jour",
+    "per_hour": "%{metric} par heure",
+    "live_rate": "%{n} jetons/min",
+    "live_sub": "en sortie, 10 dernières min · %{usd} sur 1 h",
+    "two_hours_ago": "−2 h",
+    "fewer": "moins",
+    "more": "plus",
+    "out": "%{n} en sortie",
+    "output_n": "%{n} en sortie",
+    "subagents_usd": "%{usd} en sous-agents",
+    "empty": "Rien sur cette période.",
+    "card": {
+      "live": "2 dernières heures",
+      "heat": "Quand vous travaillez",
+      "heat_sub": "réponses par jour et par heure",
+      "models": "Par modèle",
+      "models_sub": "part de la valeur",
+      "sessions": "Principales sessions",
+      "sessions_sub": "cliquez pour l'ouvrir sur la carte",
+      "tools": "Outils les plus utilisés",
+      "all_time": "depuis le début",
+      "records": "Records"
+    },
+    "fact": {
+      "busiest": "Jour le plus chargé",
+      "streak": "Série",
+      "streak_sub": "d'affilée avec Claude au travail",
+      "since": "Depuis",
+      "since_sub": "première réponse le %{date}",
+      "average": "Moyenne par jour",
+      "average_sub": "%{n} jetons en sortie par jour",
+      "longest": "Plus longue réponse",
+      "tokens": "%{n} jetons",
+      "all_time": "Depuis le début",
+      "all_time_sub": "%{n} jetons en sortie"
+    },
+    "not_priced": "Sans prix : %{models}.",
+    "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 6 oct. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
+  },
+  "map": {
+    "loading": "Lecture des sessions…",
+    "titles": {
+      "label": "Titres",
+      "hover": "Survol",
+      "open": "Ouvertes",
+      "all": "Toutes"
+    },
+    "legend": {
+      "working": "au travail",
+      "idle": "ouverte, au repos",
+      "closed": "fermée",
+      "remote": "autre machine",
+      "started": "démarrée",
+      "forked": "dupliquée",
+      "message": "message",
+      "report": "compte rendu",
+      "subagent": "sous-agent"
+    }
+  },
+  "panel": {
+    "overview": {
+      "title": "En ce moment",
+      "open_count": {
+        "one": "session ouverte",
+        "other": "sessions ouvertes"
+      },
+      "working": "au travail",
+      "agents_count": {
+        "one": "sous-agent actif",
+        "other": "sous-agents actifs"
+      },
+      "open": "Sessions ouvertes",
+      "none_open": "Aucune session Claude ouverte.",
+      "talkative": "Les plus bavardes · %{range}",
+      "no_talk": "Aucun message entre sessions sur cette période.",
+      "all_time": "toute la période",
+      "days": {
+        "one": "%{n} jour",
+        "other": "%{n} jours"
+      },
+      "sent": {
+        "one": "%{n} envoyé",
+        "other": "%{n} envoyés"
+      }
+    },
+    "kind": {
+      "subagent": "sous-agent",
+      "terminal": "terminal",
+      "desktop": "bureau",
+      "remote": "distante",
+      "gone": "disparue"
+    },
+    "chip": {
+      "scheduled": "⏱ planifiée",
+      "archived": "archivée"
+    },
+    "field": {
+      "started": "Démarrée",
+      "last_active": "Dernière activité",
+      "turns": "Tours",
+      "tokens": "Jetons",
+      "process": "Processus",
+      "parent": "Parent",
+      "pull_requests": "Pull requests"
+    },
+    "tokens_value": "%{total} · %{output} en sortie · ≈ %{cost}",
+    "now_tool": "MAINTENANT",
+    "last_tool": "DERNIER",
+    "ago": "il y a %{time}",
+    "back": "← Vue d'ensemble",
+    "forked_from": "Dupliquée depuis",
+    "started_by": "Démarrée par",
+    "kids": "Sessions démarrées · %{n}",
+    "messages": "Messages · %{n}",
+    "no_messages": "Aucun message avec d'autres sessions.",
+    "subagents": "Sous-agents · %{n}",
+    "msg": {
+      "report": "compte rendu ·",
+      "failed": "échec ·"
+    }
+  },
+  "state": {
+    "running": "en cours",
+    "done": "terminé",
+    "remote": "sur une autre machine",
+    "gone": "n'est plus sur ce Mac",
+    "working": "au travail",
+    "idle_open": "au repos · ouverte",
+    "archived": "archivée",
+    "closed": "fermée",
+    "reply": "réponse"
+  },
+  "timeline": {
+    "loading": "Lecture des sessions…",
+    "rows": {
+      "one": "%{n} session · la plus récente en haut",
+      "other": "%{n} sessions · les plus récentes en haut"
+    },
+    "tip": {
+      "report": "Compte rendu",
+      "message": "Message",
+      "failed": "échec"
+    }
+  },
+  "ui": {
+    "gb": "%{n} Go",
+    "mb": "%{n} Mo",
+    "kb_s": "%{n} ko/s",
+    "mb_s": "%{n} Mo/s",
+    "days": "%{n} j",
+    "ago": "il y a %{time}"
+  },
+  "view": {
+    "loading": "Lecture de la machine…",
+    "title": "Qui utilise cette machine",
+    "updated": "mis à jour il y a %{ago}",
+    "sort_by": "Trier par",
+    "sort_ram": "Mémoire",
+    "cpu": "CPU",
+    "memory_pressure": "Pression mémoire",
+    "pressure": {
+      "normal": "Normale",
+      "warning": "Alerte",
+      "critical": "Critique",
+      "unknown": "Inconnue"
+    },
+    "compressed": "%{size} compressés",
+    "memory": "Mémoire",
+    "of": "%{used} sur %{total}",
+    "swap": "Swap",
+    "swap_io": "entrée %{swap_in} · sortie %{swap_out}",
+    "cpu_of_cores": "%{cpu} sur %{n} cœurs",
+    "docker_vm": "VM Docker",
+    "vm_split": "%{containers} en conteneurs · reste %{other}",
+    "containers_n": {
+      "one": "%{n} conteneur",
+      "other": "%{n} conteneurs"
+    },
+    "who_uses_it": "QUI L'UTILISE",
+    "builds_n": {
+      "one": "%{n} build",
+      "other": "%{n} builds"
+    },
+    "build": "build",
+    "no_limit": "sans limite",
+    "in_container": "dans %{name}",
+    "more_processes": {
+      "one": "et %{n} autre processus",
+      "other": "et %{n} autres processus"
+    },
+    "sessions_caption": "SESSIONS · %{n}",
+    "unattached": "CONTENEURS SANS SESSION",
+    "why": {
+      "client": "sa commande docker",
+      "folder": "son dossier",
+      "mounts": "monte %{dir}",
+      "shared": {
+        "one": "%{n} session travaille dans ses dossiers",
+        "other": "%{n} sessions travaillent dans ses dossiers"
+      },
+      "none": "aucune session ne s'y rattache"
+    },
+    "cpus": "%{n} CPU",
+    "any_cpu": "CPU illimité",
+    "any_ram": "mémoire illimitée"
+  }
+}

@@ -5,12 +5,15 @@ pub mod desktop;
 pub mod docker;
 pub mod graph;
 pub mod host;
+pub mod i18n;
 pub mod sessions;
 pub mod text;
 pub mod transcripts;
 pub mod usage;
 
 pub use attribute::{Inputs, Report, attribute};
+
+rust_i18n::i18n!("../../locales", fallback = "en");
 
 use std::collections::HashMap;
 use std::path::PathBuf;

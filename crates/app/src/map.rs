@@ -3,12 +3,13 @@
 use crate::glide;
 use crate::layout::{Body, Link, Sim};
 use crate::settings::{self, Settings, data_dir};
-use crate::state::{Filters, is_session, node_tip, project_colors, visible, working};
+use crate::state::{Filters, is_session, node_tip, project_colors, tool_name, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -616,7 +617,14 @@ impl Render for MapView {
             }
         }
         let Some(g) = self.graph.clone() else {
-            return div().id("map").size_full().flex().items_center().justify_center().text_color(muted()).child("Reading the sessions…");
+            return div()
+                .id("map")
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(muted())
+                .child(t!("map.loading").to_string());
         };
 
         let (k, tx, ty) = (self.k, self.tx, self.ty);
@@ -794,7 +802,7 @@ impl Render for MapView {
                 if n.live { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM },
             ));
             if in_focus && let Some(m) = n.now.as_ref().filter(|_| working(n)) {
-                let line: SharedString = clip(&format!("⟳ {} · {}", m.tool, m.detail), 44).into();
+                let line: SharedString = clip(&format!("⟳ {} · {}", tool_name(&m.tool), m.detail), 44).into();
                 scene.labels.push((
                     point(c.x, rect.origin.y + px(h)),
                     line,
@@ -876,9 +884,10 @@ impl Render for MapView {
         let canvas_bounds = self.canvas.clone();
         let tip = self.hover.map(|b| node_tip(&g.nodes[self.node_of[b]], self.mouse - self.canvas.get().origin, now));
 
-        let titles_seg = |label: &'static str, mode: Titles| {
+        // The id stays the English name whatever the language.
+        let titles_seg = |id: &'static str, label: String, mode: Titles| {
             div()
-                .id(label)
+                .id(id)
                 .px(px(10.0))
                 .py(px(3.0))
                 .rounded(px(6.0))
@@ -899,7 +908,11 @@ impl Render for MapView {
                 .into_any_element()
         };
         let titles_index = [Titles::Hover, Titles::Open, Titles::All].iter().position(|t| *t == self.titles).unwrap_or(0);
-        let titles_items = vec![titles_seg("Hover", Titles::Hover), titles_seg("Open", Titles::Open), titles_seg("All", Titles::All)];
+        let titles_items = vec![
+            titles_seg("Hover", t!("map.titles.hover").to_string(), Titles::Hover),
+            titles_seg("Open", t!("map.titles.open").to_string(), Titles::Open),
+            titles_seg("All", t!("map.titles.all").to_string(), Titles::All),
+        ];
         let titles_control = self.titles_seg.render(titles_index, titles_items, window, cx);
 
         div()
@@ -988,7 +1001,7 @@ impl Render for MapView {
                     .items_center()
                     .gap(px(8.0))
                     // The label sits outside the control: it names it, it is not one of its options.
-                    .child(div().text_size(px(11.0)).text_color(faint()).child("Titles"))
+                    .child(div().text_size(px(11.0)).text_color(faint()).child(t!("map.titles.label").to_string()))
                     .child(titles_control),
             )
             // Narrow, the legend would cover the live feed: it goes.
@@ -998,7 +1011,7 @@ impl Render for MapView {
 }
 
 fn legend() -> Div {
-    let item = |swatch: Div, label: &'static str| div().flex().items_center().gap(px(7.0)).child(swatch).child(label);
+    let item = |swatch: Div, label: std::borrow::Cow<str>| div().flex().items_center().gap(px(7.0)).child(swatch).child(label.into_owned());
     let ring = |c: Rgba, dashed: bool| div().size(px(10.0)).rounded_full().border_1().border_color(c).when(dashed, |d| d.border_dashed());
     let bar = |c: Rgba| div().w(px(14.0)).h(px(2.0)).bg(c);
     div()
@@ -1016,13 +1029,13 @@ fn legend() -> Div {
         .gap_y(px(5.0))
         .text_size(px(11.0))
         .text_color(muted())
-        .child(item(dot(amber()), "working"))
-        .child(item(dot(green()), "open, idle"))
-        .child(item(ring(rgb(0x7c9cff), true), "closed"))
-        .child(item(ring(rgb(0xb8b9c6), true), "other machine"))
-        .child(item(bar(rgb(0xa78bfa)), "started"))
-        .child(item(bar(rgb(0xf472b6)), "forked"))
-        .child(item(bar(blue()), "message"))
-        .child(item(bar(green()), "report back"))
-        .child(item(dot(rgb(0x7c9cff)).size(px(5.0)), "subagent"))
+        .child(item(dot(amber()), t!("map.legend.working")))
+        .child(item(dot(green()), t!("map.legend.idle")))
+        .child(item(ring(rgb(0x7c9cff), true), t!("map.legend.closed")))
+        .child(item(ring(rgb(0xb8b9c6), true), t!("map.legend.remote")))
+        .child(item(bar(rgb(0xa78bfa)), t!("map.legend.started")))
+        .child(item(bar(rgb(0xf472b6)), t!("map.legend.forked")))
+        .child(item(bar(blue()), t!("map.legend.message")))
+        .child(item(bar(green()), t!("map.legend.report")))
+        .child(item(dot(rgb(0x7c9cff)).size(px(5.0)), t!("map.legend.subagent")))
 }

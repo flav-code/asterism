@@ -40,6 +40,13 @@ right; click it to restart on the new version. Installed with Scoop, it leaves u
 The builds are not signed yet. On macOS, the first time you open it, macOS blocks it: go to System Settings → Privacy
 & Security and click Open Anyway. On Windows, SmartScreen asks once: More info → Run anyway.
 
+## Languages
+
+English and French. Asterism follows the system's language; the button at the top right picks another one, and the
+choice is kept. The texts live in `locales/`, one JSON file per language (`en.json` is the reference). To add one, copy
+`en.json` to `<code>.json`, translate the values (keep each `%{…}` as it is), and add the code to `LANGUAGES` in
+`crates/core/src/i18n.rs`; `cargo test -p asterism-core i18n` checks that no key is missing.
+
 ## Try it
 
 ```sh
@@ -90,6 +97,7 @@ like a secret (tokens, keys, passwords, `Authorization` headers, credentials in 
 
 - `crates/core`: the detection, with no UI dependency. Tests run on recorded data (`tests/fixtures`).
 - `crates/cli`: the `asterism-cli` command.
+- `locales`: the app's texts, one JSON file per language.
 - `crates/app`: the app (tabs Map, Timeline, Usage, Machine), built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
   Sampling runs on its own thread; the window only reads the latest report.
 

@@ -5,9 +5,11 @@ use crate::settings::{self, Settings};
 use crate::ui::blue; // over gpui's color of the same name
 use crate::ui::*;
 use asterism_core::graph::UsageView;
+use asterism_core::i18n::{count, decimal, names};
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -48,13 +50,14 @@ enum Metric {
 }
 
 impl Metric {
-    fn name(self) -> &'static str {
+    fn name(self) -> String {
         match self {
-            Metric::Usd => "API value",
-            Metric::Out => "Output tokens",
-            Metric::All => "All tokens",
-            Metric::Replies => "Replies",
+            Metric::Usd => t!("dash.metric.usd"),
+            Metric::Out => t!("dash.metric.out"),
+            Metric::All => t!("dash.metric.all"),
+            Metric::Replies => t!("dash.metric.replies"),
         }
+        .into_owned()
     }
     fn of(self, t: &asterism_core::usage::Totals) -> f64 {
         match self {
@@ -69,35 +72,43 @@ impl Metric {
     }
 }
 
-/// 1.2K, 34M, 5.6B.
+/// 1.2K, 34M, 5.6B (1,2 k, 34 M, 5,6 Md in French).
 pub fn short(x: f64) -> String {
     let a = x.abs();
     let (v, unit) = match a {
-        a if a >= 1e9 => (x / 1e9, "B"),
-        a if a >= 1e6 => (x / 1e6, "M"),
-        a if a >= 1e3 => (x / 1e3, "K"),
+        a if a >= 1e9 => (x / 1e9, "dash.billions"),
+        a if a >= 1e6 => (x / 1e6, "dash.millions"),
+        a if a >= 1e3 => (x / 1e3, "dash.thousands"),
         _ => return format!("{}", x.round()),
     };
-    if v.abs() >= 10.0 { format!("{v:.0}{unit}") } else { format!("{v:.1}{unit}") }
+    let n = if v.abs() >= 10.0 { format!("{v:.0}") } else { decimal(v, 1) };
+    t!(unit, n = n).into_owned()
 }
 
-/// $1,234 · $56 · $0.91
+/// $1,234 · $56 · $0.91, still in US dollars in every language (1 234 $ in French).
 pub fn usd(x: f64) -> String {
-    if x >= 1000.0 {
+    let n = if x >= 1000.0 {
         let s = format!("{}", x.round() as u64);
+        let sep = t!("dash.thousands_sep");
         let mut out = String::new();
         for (i, c) in s.chars().enumerate() {
             if i > 0 && (s.len() - i) % 3 == 0 {
-                out.push(',');
+                out.push_str(&sep);
             }
             out.push(c);
         }
-        format!("${out}")
+        out
     } else if x >= 10.0 {
-        format!("${x:.0}")
+        format!("{x:.0}")
     } else {
-        format!("${x:.2}")
-    }
+        decimal(x, 2)
+    };
+    t!("dash.usd", n = n).into_owned()
+}
+
+/// A family's name on screen: "Other" is a word, the others are model names.
+fn fam_label(f: &str) -> String {
+    if f == "Other" { t!("dash.other_model").into_owned() } else { f.to_string() }
 }
 
 /// "claude-opus-5-5" → "Opus 5.5".
@@ -210,8 +221,8 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
             index.insert(day_key(d), cols.len());
             cols.push(Col {
                 key: day_key(d),
-                label: d.format("%-d %b").to_string(),
-                long: d.format("%a %-d %b").to_string(),
+                label: d.format(&names(&d, "%-d %b")).to_string(),
+                long: d.format(&names(&d, "%a %-d %b")).to_string(),
                 fams: [0.0; 5],
             });
             d += chrono::Duration::days(1);
@@ -289,26 +300,31 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     }
     let (all_usd, all_o) = per_day.values().fold((0.0, 0.0), |a, v| (a.0 + v.0, a.1 + v.2));
     let since = ((now.timestamp_millis() as f64 - u.first as f64) / 86_400_000.0).round().max(1.0);
-    let first = Local.timestamp_millis_opt(u.first as i64).single().map(|t| t.format("%-d %b %Y").to_string()).unwrap_or_default();
-    let long_day = |k: &str| parse_day(k).map(|d| d.format("%-d %b").to_string()).unwrap_or_default();
+    let first =
+        Local.timestamp_millis_opt(u.first as i64).single().map(|t| t.format(&names(&t, "%-d %b %Y")).to_string()).unwrap_or_default();
+    let long_day = |k: &str| parse_day(k).map(|d| d.format(&names(&d, "%-d %b")).to_string()).unwrap_or_default();
     let facts = [
         (
-            "Busiest day".into(),
+            t!("dash.fact.busiest").into_owned(),
             best.map_or("—".into(), |b| usd(b.1.0)),
-            best.map_or(String::new(), |b| format!("{} · {} replies", long_day(b.0), short(b.1.1))),
+            best.map_or(String::new(), |b| format!("{} · {}", long_day(b.0), count("dash.replies_n", b.1.1 as u64))),
         ),
-        ("Streak".into(), format!("{streak} day{}", if streak == 1 { "" } else { "s" }), "in a row with Claude at work".into()),
-        ("Since".into(), format!("{since} days"), format!("first reply {first}")),
-        ("Daily average".into(), usd(all_usd / since), format!("{} output tokens a day", short(all_o / since))),
+        (t!("dash.fact.streak").into_owned(), count("dash.days_n", streak), t!("dash.fact.streak_sub").into_owned()),
+        (t!("dash.fact.since").into_owned(), count("dash.days_n", since as u64), t!("dash.fact.since_sub", date = first).into_owned()),
+        (t!("dash.fact.average").into_owned(), usd(all_usd / since), t!("dash.fact.average_sub", n = short(all_o / since)).into_owned()),
         (
-            "Longest reply".into(),
-            u.biggest.as_ref().map_or("—".into(), |b| format!("{} tokens", short(b.o as f64))),
+            t!("dash.fact.longest").into_owned(),
+            u.biggest.as_ref().map_or("—".into(), |b| t!("dash.fact.tokens", n = short(b.o as f64)).into_owned()),
             u.biggest.as_ref().map_or(String::new(), |b| {
-                let day = Local.timestamp_millis_opt(b.ts as i64).single().map(|t| t.format("%-d %b").to_string()).unwrap_or_default();
+                let day = Local
+                    .timestamp_millis_opt(b.ts as i64)
+                    .single()
+                    .map(|t| t.format(&names(&t, "%-d %b")).to_string())
+                    .unwrap_or_default();
                 format!("{} · {day}", pretty_model(&b.model))
             }),
         ),
-        ("All time".into(), usd(all_usd), format!("{} output tokens", short(all_o))),
+        (t!("dash.fact.all_time").into_owned(), usd(all_usd), t!("dash.fact.all_time_sub", n = short(all_o)).into_owned()),
     ];
 
     Dash {
@@ -385,8 +401,8 @@ enum Hover {
     Cell(usize, usize),
 }
 
-/// The data, range, metric and minute a `Dash` was worked out for.
-type DashKey = (usize, Range, Metric, u64);
+/// The data, range, metric, minute and language a `Dash` was worked out for.
+type DashKey = (usize, Range, Metric, u64, String);
 
 pub struct DashView {
     usage: Option<Arc<UsageView>>,
@@ -467,7 +483,7 @@ impl DashView {
 
     fn dash(&mut self) -> Option<Rc<Dash>> {
         let u = self.usage.clone()?;
-        let key = (Arc::as_ptr(&u) as usize, self.range, self.metric, now_ms() / 60_000);
+        let key = (Arc::as_ptr(&u) as usize, self.range, self.metric, now_ms() / 60_000, asterism_core::i18n::current());
         if let Some((k, d)) = &self.cache
             && *k == key
         {
@@ -607,6 +623,11 @@ fn heat_color(level: f32) -> Rgba {
     Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: 1.0 }
 }
 
+/// The short name of a weekday, Monday first, in this language.
+fn weekday(wd: usize) -> String {
+    t!("date.days_from_sunday").split(' ').nth((wd + 1) % 7).unwrap_or("").to_string()
+}
+
 /// Captures where an element was laid out, for hit tests.
 fn probe(cell: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
     canvas(move |b, _, _| cell.set(b), |_, _, _, _| {}).absolute().size_full()
@@ -615,7 +636,7 @@ fn probe(cell: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
 impl Render for DashView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(d) = self.dash() else {
-            return div().id("usage").size_full().p(px(20.0)).text_color(muted()).child("Reading your transcripts…");
+            return div().id("usage").size_full().p(px(20.0)).text_color(muted()).child(t!("dash.loading").into_owned());
         };
         let u = self.usage.clone().expect("dash() needs it");
         // What is on screen this frame: every number slides to the data.
@@ -666,7 +687,7 @@ impl Render for DashView {
         if a.moving {
             crate::glide::again(window, cx);
         }
-        let button = |id: String, label: &'static str, on: bool| {
+        let button = |id: String, label: String, on: bool| {
             div()
                 .id(SharedString::from(id))
                 .h_full()
@@ -679,50 +700,63 @@ impl Render for DashView {
                 .text_color(if on { text() } else { muted() })
                 .child(label)
         };
-        let ranges =
-            [(Range::Today, "Today"), (Range::Days(7), "7d"), (Range::Days(30), "30d"), (Range::Days(90), "90d"), (Range::All, "All")]
-                .into_iter()
-                .map(|(r, label)| {
-                    button(format!("u-range-{label}"), label, self.range == r)
-                        .on_click(cx.listener(move |v, _, _, cx| {
-                            v.range = r;
-                            settings::change(cx, |s| s.usage_range = label.to_lowercase());
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                })
-                .collect();
-        let metrics = [(Metric::Usd, "Value $"), (Metric::Out, "Output"), (Metric::All, "All tokens"), (Metric::Replies, "Replies")]
-            .into_iter()
-            .map(|(m, label)| {
-                button(format!("u-metric-{label}"), label, self.metric == m)
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        v.metric = m;
-                        let name = match m {
-                            Metric::Usd => "usd",
-                            Metric::Out => "out",
-                            Metric::All => "all",
-                            Metric::Replies => "replies",
-                        };
-                        settings::change(cx, |s| s.usage_metric = name.into());
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect();
+        // `label` stays English: it names the button and the saved setting; `text` is what shows.
+        let ranges = [
+            (Range::Today, "Today", t!("dash.range.today")),
+            (Range::Days(7), "7d", t!("dash.range.7d")),
+            (Range::Days(30), "30d", t!("dash.range.30d")),
+            (Range::Days(90), "90d", t!("dash.range.90d")),
+            (Range::All, "All", t!("dash.range.all")),
+        ]
+        .into_iter()
+        .map(|(r, label, text)| {
+            button(format!("u-range-{label}"), text.into_owned(), self.range == r)
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    v.range = r;
+                    settings::change(cx, |s| s.usage_range = label.to_lowercase());
+                    cx.notify();
+                }))
+                .into_any_element()
+        })
+        .collect();
+        let metrics = [
+            (Metric::Usd, "Value $", t!("dash.metric_button.usd")),
+            (Metric::Out, "Output", t!("dash.metric_button.out")),
+            (Metric::All, "All tokens", t!("dash.metric_button.all")),
+            (Metric::Replies, "Replies", t!("dash.metric_button.replies")),
+        ]
+        .into_iter()
+        .map(|(m, label, text)| {
+            button(format!("u-metric-{label}"), text.into_owned(), self.metric == m)
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    v.metric = m;
+                    let name = match m {
+                        Metric::Usd => "usd",
+                        Metric::Out => "out",
+                        Metric::All => "all",
+                        Metric::Replies => "replies",
+                    };
+                    settings::change(cx, |s| s.usage_metric = name.into());
+                    cx.notify();
+                }))
+                .into_any_element()
+        })
+        .collect();
         let range_index =
             [Range::Today, Range::Days(7), Range::Days(30), Range::Days(90), Range::All].iter().position(|r| *r == self.range).unwrap_or(2);
         let metric_index = [Metric::Usd, Metric::Out, Metric::All, Metric::Replies].iter().position(|m| *m == self.metric).unwrap_or(0);
+        // Wraps when the title and both controls don't fit on one line (French is longer).
         let head = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(10.0))
             .mb(px(14.0))
-            .child(div().mr_auto().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).child("Token usage"))
+            .child(div().mr_auto().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).child(t!("dash.title").into_owned()))
             .child(self.range_seg.render(range_index, ranges, window, cx))
             .child(self.metric_seg.render(metric_index, metrics, window, cx));
 
-        let pct = |x: f64| format!("{}%", if x.is_finite() { (x * 100.0).round() } else { 0.0 });
+        let pct = |x: f64| t!("number.percent", n = if x.is_finite() { (x * 100.0).round() } else { 0.0 }).into_owned();
         let tile = |k: &str, v: String, s: String| {
             span(
                 div()
@@ -744,18 +778,25 @@ impl Render for DashView {
             .flex()
             .gap(px(10.0))
             .mb(px(12.0))
-            .child(tile("API-equivalent value", usd(t[0]), "at Anthropic API prices, not what you pay".into()))
-            .child(tile("Tokens processed", short(t[1]), format!("{} read from cache", pct(t[7] / t[1].max(1.0)))))
-            .child(tile("Output tokens", short(t[2]), "written by Claude".into()))
-            .child(tile("Cache hit rate", pct(t[3]), format!("saved ≈ {} vs no cache", usd(t[6]))))
-            .child(tile("Replies", short(t[4]), format!("{} sessions", d.session_count)))
-            .child(tile("Subagents", pct(t[5]), "of the value".into()));
+            .child(tile(&t!("dash.tile.value"), usd(t[0]), t!("dash.tile.value_sub").into_owned()))
+            .child(tile(
+                &t!("dash.tile.processed"),
+                short(t[1]),
+                t!("dash.tile.processed_sub", pct = pct(t[7] / t[1].max(1.0))).into_owned(),
+            ))
+            .child(tile(&t!("dash.tile.output"), short(t[2]), t!("dash.tile.output_sub").into_owned()))
+            .child(tile(&t!("dash.tile.cache"), pct(t[3]), t!("dash.tile.cache_sub", usd = usd(t[6])).into_owned()))
+            .child(tile(&t!("dash.tile.replies"), short(t[4]), count("dash.sessions_n", d.session_count as u64)))
+            .child(tile(&t!("dash.tile.subagents"), pct(t[5]), t!("dash.tile.subagents_sub").into_owned()));
 
         // The bars chart.
         let metric = self.metric;
         let hover = self.hover;
         let bars_d = d.clone();
-        let today_word = if self.range == Range::Today { "now" } else { "today" };
+        let today_word = if self.range == Range::Today { t!("dash.now") } else { t!("dash.today") }.into_owned();
+        // A date label needs about this much room from "today" (wider in French), and from the next date.
+        let near = 56.0 + 3.2 * today_word.chars().count().saturating_sub(5) as f32;
+        let label_gap = d.cols.iter().map(|c| c.label.chars().count()).max().unwrap_or(0) as f32 * 6.3 + 8.0;
         let bars = canvas(
             {
                 let cell = self.bars.clone();
@@ -785,7 +826,7 @@ impl Render for DashView {
                 }
                 let (x0, step, _) = band(w, d.cols.len());
                 let plot = w - 48.0 - 6.0;
-                let every = d.cols.len().div_ceil(10).max(1);
+                let every = d.cols.len().div_ceil(10).max((label_gap / step).ceil() as usize).max(1);
                 for (i, c) in d.cols.iter().enumerate() {
                     let (x, bw) = (x0 + bars_pos[i].0 as f32 * plot, bars_pos[i].1 as f32 * plot);
                     let mut acc = 0.0;
@@ -808,15 +849,21 @@ impl Render for DashView {
                     }
                     let last = i + 1 == d.cols.len();
                     // A date too close to "today" (the last column) would run into it.
-                    let near_last = !last && (d.cols.len() - 1 - i) as f32 * step < 56.0;
+                    let near_last = !last && (d.cols.len() - 1 - i) as f32 * step < near;
                     if (i % every == 0 && !near_last) || last {
                         let (label, color) = if last { (today_word.to_string(), text()) } else { (c.label.clone(), faint()) };
+                        // Centred under its column; the last one ends at the chart's edge at the latest ("aujourd'hui" is long).
+                        let (at, align) = if last {
+                            ((x + bw / 2.0 + label.chars().count() as f32 * 6.3 / 2.0).min(w), 1.0)
+                        } else {
+                            (x + bw / 2.0, 0.5)
+                        };
                         paint_text(
                             window,
                             cx,
                             label.into(),
-                            (o.x + px(x + bw / 2.0), o.y + px(h - 9.0)),
-                            0.5,
+                            (o.x + px(at), o.y + px(h - 9.0)),
+                            align,
                             10.5,
                             color,
                             FontWeight::NORMAL,
@@ -853,7 +900,7 @@ impl Render for DashView {
                 paint_text(
                     window,
                     cx,
-                    format!("{} tok/min", short(last10)).into(),
+                    t!("dash.live_rate", n = short(last10)).into_owned().into(),
                     (o.x, o.y + px(15.0)),
                     0.0,
                     20.0,
@@ -864,7 +911,7 @@ impl Render for DashView {
                 paint_text(
                     window,
                     cx,
-                    format!("output, last 10 min · {} in the last hour", usd(last_hour)).into(),
+                    t!("dash.live_sub", usd = usd(last_hour)).into_owned().into(),
                     (o.x, o.y + px(35.0)),
                     0.0,
                     10.5,
@@ -901,8 +948,9 @@ impl Render for DashView {
                     rgba(0),
                     BorderStyle::Solid,
                 ));
-                paint_text(window, cx, "−2 h".into(), (o.x + px(l), o.y + px(h - 7.0)), 0.0, 10.5, faint(), FontWeight::NORMAL, true);
-                paint_text(window, cx, "now".into(), (o.x + px(w - r), o.y + px(h - 7.0)), 1.0, 10.5, text(), FontWeight::NORMAL, true);
+                let (ago, now) = (t!("dash.two_hours_ago").into_owned(), t!("dash.now").into_owned());
+                paint_text(window, cx, ago.into(), (o.x + px(l), o.y + px(h - 7.0)), 0.0, 10.5, faint(), FontWeight::NORMAL, true);
+                paint_text(window, cx, now.into(), (o.x + px(w - r), o.y + px(h - 7.0)), 1.0, 10.5, text(), FontWeight::NORMAL, true);
                 if let Some(Hover::Minute(i)) = hover {
                     window.paint_quad(fill(Bounds::new(o + point(px(x(i)), px(t)), size(px(1.0), px(h - bm - t))), rgba(0xffffff40)));
                 }
@@ -935,11 +983,11 @@ impl Render for DashView {
                         true,
                     );
                 }
-                for (wd, name) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].iter().enumerate() {
+                for wd in 0..7 {
                     paint_text(
                         window,
                         cx,
-                        (*name).into(),
+                        weekday(wd).into(),
                         (o.x, o.y + px(t + wd as f32 * CELL_H + CELL_H / 2.0)),
                         0.0,
                         10.5,
@@ -961,7 +1009,7 @@ impl Render for DashView {
                 paint_text(
                     window,
                     cx,
-                    "fewer".into(),
+                    t!("dash.fewer").into_owned().into(),
                     (o.x + px(lx - 6.0), o.y + px(ly + 5.5)),
                     1.0,
                     10.5,
@@ -982,7 +1030,7 @@ impl Render for DashView {
                 paint_text(
                     window,
                     cx,
-                    "more".into(),
+                    t!("dash.more").into_owned().into(),
                     (o.x + px(lx + 5.0 * 16.0 + 4.0), o.y + px(ly + 5.5)),
                     0.0,
                     10.5,
@@ -1003,13 +1051,17 @@ impl Render for DashView {
                 .text_size(px(11.0))
                 .text_color(muted())
                 .child(div().size(px(10.0)).rounded(px(2.0)).bg(fam_color(f)))
-                .child(f.to_string())
+                .child(fam_label(f))
         }));
-        let per = if self.range == Range::Today { "hour" } else { "day" };
+        let chart_title = if self.range == Range::Today {
+            t!("dash.per_hour", metric = self.metric.name())
+        } else {
+            t!("dash.per_day", metric = self.metric.name())
+        };
         let models = d.models.iter().enumerate().map(|(i, (m, f, v, o))| {
             list_row(
                 div().child(m.clone()).into_any_element(),
-                value(usd(*v), format!("{} out", short(*o))),
+                value(usd(*v), t!("dash.out", n = short(*o)).into_owned()),
                 model_share[i],
                 fam_color(f),
                 i == 0,
@@ -1027,7 +1079,8 @@ impl Render for DashView {
                 .child(chip(project.clone(), muted()).bg(panel()).border_1().border_color(line()).font_family(MONO).text_size(px(10.0)))
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(DashEvent::Open(id.clone()))))
                 .into_any_element();
-            let sub = if v[3] > 0.0 { format!("{} out · {} subagents", short(v[0]), usd(v[3])) } else { format!("{} out", short(v[0])) };
+            let out = t!("dash.out", n = short(v[0])).into_owned();
+            let sub = if v[3] > 0.0 { format!("{out} · {}", t!("dash.subagents_usd", usd = usd(v[3]))) } else { out };
             list_row(label, value(usd(v[1]), sub), session_share[i], rgb(0x3987e5), i == 0)
         });
         let tools = u.tools.iter().enumerate().map(|(i, (t, n))| {
@@ -1039,7 +1092,7 @@ impl Render for DashView {
                 i == 0,
             )
         });
-        let empty = || div().text_size(px(12.0)).text_color(faint()).child("Nothing in this range.");
+        let empty = || div().text_size(px(12.0)).text_color(faint()).child(t!("dash.empty").into_owned());
         let facts = div().flex().gap(px(14.0)).children(d.facts.iter().map(|(k, v, s)| {
             span(
                 div()
@@ -1055,7 +1108,8 @@ impl Render for DashView {
         let unpriced = if u.unpriced.is_empty() {
             String::new()
         } else {
-            format!(" Not priced: {}.", u.unpriced.iter().map(|(m, n)| format!("{m} ({n})")).collect::<Vec<_>>().join(", "))
+            let models = u.unpriced.iter().map(|(m, n)| format!("{m} ({n})")).collect::<Vec<_>>().join(", ");
+            format!(" {}", t!("dash.not_priced", models = models))
         };
         let row = || div().flex().gap(px(12.0)).mb(px(12.0));
         let content = div()
@@ -1066,28 +1120,46 @@ impl Render for DashView {
             .child(tiles)
             .child(
                 row()
-                    .child(span(card(format!("{} per {per}", self.metric.name()), Some(legend.into_any_element())).child(bars), 8.0))
-                    .child(span(card("Last 2 hours", None).child(live), 4.0)),
+                    .child(span(card(chart_title.into_owned(), Some(legend.into_any_element())).child(bars), 8.0))
+                    .child(span(card(t!("dash.card.live").into_owned(), None).child(live), 4.0)),
             )
-            .child(row().child(span(card("When you work", Some(small("replies per weekday and hour"))).child(heat), 6.0)).child(span(
-                card("By model", Some(small("share of the value"))).children(models).when(d.models.is_empty(), |c| c.child(empty())),
-                6.0,
-            )))
             .child(
                 row()
                     .child(span(
-                        card("Top sessions", Some(small("click to open on the map")))
+                        card(t!("dash.card.heat").into_owned(), Some(small(t!("dash.card.heat_sub").into_owned()))).child(heat),
+                        6.0,
+                    ))
+                    .child(span(
+                        card(t!("dash.card.models").into_owned(), Some(small(t!("dash.card.models_sub").into_owned())))
+                            .children(models)
+                            .when(d.models.is_empty(), |c| c.child(empty())),
+                        6.0,
+                    )),
+            )
+            .child(
+                row()
+                    .child(span(
+                        card(t!("dash.card.sessions").into_owned(), Some(small(t!("dash.card.sessions_sub").into_owned())))
                             .children(sessions)
                             .when(d.sessions.is_empty(), |c| c.child(empty())),
                         8.0,
                     ))
-                    .child(span(card("Most used tools", Some(small("all time"))).children(tools), 4.0)),
+                    .child(span(
+                        card(t!("dash.card.tools").into_owned(), Some(small(t!("dash.card.all_time").into_owned()))).children(tools),
+                        4.0,
+                    )),
             )
-            .child(row().child(span(card("Records", Some(small("all time"))).child(facts), 12.0)))
-            .child(div().text_size(px(11.5)).text_color(faint()).line_height(px(17.0)).child(format!(
-                "Value = what these tokens would cost on the Anthropic API (public prices of 6 Oct 2026: input, output, cache writes \
-                 at 1.25× or 2×, cache reads). A subscription isn't billed this way; it shows how much work went through.{unpriced}"
-            )));
+            .child(row().child(span(
+                card(t!("dash.card.records").into_owned(), Some(small(t!("dash.card.all_time").into_owned()))).child(facts),
+                12.0,
+            )))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(faint())
+                    .line_height(px(17.0))
+                    .child(t!("dash.footer", unpriced = unpriced).into_owned()),
+            );
 
         let tip = self.hover.map(|h| {
             let pos = self.mouse - self.root.get().origin;
@@ -1104,22 +1176,26 @@ impl Render for DashView {
                                 .gap(px(6.0))
                                 .text_size(px(12.0))
                                 .child(div().size(px(8.0)).rounded(px(2.0)).bg(fam_color(f)))
-                                .child(f.to_string())
+                                .child(fam_label(f))
                                 .child(div().text_color(muted()).child(metric.fmt(*v)))
                         }))
                 }
                 Hover::Minute(i) => {
                     let (t, o, n, v) = d.live[i];
                     tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(when(t))).child(
-                        div().text_size(px(12.0)).text_color(muted()).child(format!("{} output · {n} replies · {}", short(o), usd(v))),
+                        div().text_size(px(12.0)).text_color(muted()).child(format!(
+                            "{} · {} · {}",
+                            t!("dash.output_n", n = short(o)),
+                            count("dash.replies_n", n as u64),
+                            usd(v)
+                        )),
                     )
                 }
                 Hover::Cell(wd, hr) => {
                     let (n, v) = d.heat[wd][hr];
-                    let day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][wd];
-                    tip_card(pos)
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{day} {hr:02}:00")))
-                        .child(div().text_size(px(12.0)).text_color(muted()).child(format!("{} replies · {}", short(n), usd(v))))
+                    tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", weekday(wd)))).child(
+                        div().text_size(px(12.0)).text_color(muted()).child(format!("{} · {}", count("dash.replies_n", n as u64), usd(v))),
+                    )
                 }
             }
         });
@@ -1164,5 +1240,10 @@ mod tests {
         assert_eq!(pretty_model("claude-opus-5-5"), "Opus 5.5");
         assert_eq!(pretty_model("claude-fable-5"), "Fable 5");
         assert_eq!(nice_ticks(2226.0, 4.0), vec![0.0, 500.0, 1000.0, 1500.0, 2000.0, 2500.0]);
+        // The only test here that reads text, so switching the language races with nothing.
+        asterism_core::i18n::set("fr");
+        let (fr_usd, fr_big, fr_short) = (usd(9.92), usd(29555.4), short(6.6e6));
+        asterism_core::i18n::set("en");
+        assert_eq!((fr_usd.as_str(), fr_big.as_str(), fr_short.as_str()), ("9,92\u{a0}$", "29\u{a0}555\u{a0}$", "6,6\u{a0}M"));
     }
 }

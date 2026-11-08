@@ -1,6 +1,8 @@
 //! Shared look: the dark palette, number formats and small building blocks.
+use asterism_core::i18n;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
@@ -56,18 +58,20 @@ pub fn grey() -> Rgba {
 pub fn bytes(b: u64) -> String {
     let gb = b as f64 / 1e9;
     match gb {
-        g if g >= 10.0 => format!("{g:.0} GB"),
-        g if g >= 1.0 => format!("{g:.1} GB"),
-        _ => format!("{:.0} MB", b as f64 / 1e6),
+        g if g >= 10.0 => t!("ui.gb", n = i18n::decimal(g, 0)),
+        g if g >= 1.0 => t!("ui.gb", n = i18n::decimal(g, 1)),
+        _ => t!("ui.mb", n = i18n::decimal(b as f64 / 1e6, 0)),
     }
+    .into_owned()
 }
 
 pub fn cpu(p: f32) -> String {
-    format!("{p:.0}%")
+    t!("number.percent", n = format!("{p:.0}")).into_owned()
 }
 
 pub fn rate(per_s: f64) -> String {
-    if per_s < 1e6 { format!("{:.0} KB/s", per_s / 1e3) } else { format!("{:.1} MB/s", per_s / 1e6) }
+    if per_s < 1e6 { t!("ui.kb_s", n = i18n::decimal(per_s / 1e3, 0)) } else { t!("ui.mb_s", n = i18n::decimal(per_s / 1e6, 1)) }
+        .into_owned()
 }
 
 pub fn ago(secs: u64) -> String {
@@ -75,7 +79,7 @@ pub fn ago(secs: u64) -> String {
         s if s < 60 => format!("{s} s"),
         s if s < 3600 => format!("{} min", s / 60),
         s if s < 86_400 => format!("{} h", s / 3600),
-        s => format!("{} d", s / 86_400),
+        s => t!("ui.days", n = s / 86_400).into_owned(),
     }
 }
 
@@ -160,5 +164,9 @@ pub fn tip_card(pos: Point<Pixels>) -> Div {
 pub fn when(ms: u64) -> String {
     use chrono::{Local, TimeZone};
     let Some(t) = Local.timestamp_millis_opt(ms as i64).single() else { return String::new() };
-    if t.date_naive() == Local::now().date_naive() { t.format("%H:%M").to_string() } else { t.format("%-d %b %H:%M").to_string() }
+    if t.date_naive() == Local::now().date_naive() {
+        t.format("%H:%M").to_string()
+    } else {
+        t.format(&i18n::names(&t, "%-d %b %H:%M")).to_string()
+    }
 }

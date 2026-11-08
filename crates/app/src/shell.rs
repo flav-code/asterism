@@ -10,9 +10,11 @@ use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use crate::view::Machine;
 use asterism_core::graph::{Graph, Msg, MsgKind, NodeKind, UsageView};
+use asterism_core::i18n;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use rust_i18n::t;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -55,7 +57,7 @@ const SLIDE_IN: Duration = Duration::from_millis(450);
 const FEED_MAX: usize = 7;
 /// Below this window width, the side panel lies over the map instead of next to it.
 const NARROW: f32 = 1100.0;
-/// The feed's width open, and closed (its title and arrow only).
+/// The feed's width open, and closed (its title and arrow only, sized for the English title).
 const FEED_OPEN_W: f32 = 380.0;
 const FEED_CLOSED_W: f32 = 118.0;
 
@@ -65,9 +67,33 @@ struct FeedEvent {
     ts: u64,
     color: Rgba,
     who: String,
-    what: String,
+    what: What,
     /// The session a click selects.
     id: String,
+}
+
+/// What a feed line says: written when it is drawn, so it follows a change of language.
+enum What {
+    /// A message's text, or what a session works on: from the data, never translated.
+    Data(String),
+    Report(String),
+    StartedWorking,
+    Finished,
+    NewSession,
+    Subagent(String),
+}
+
+impl What {
+    fn say(&self) -> String {
+        match self {
+            What::Data(s) => s.clone(),
+            What::Report(s) => t!("shell.feed.report", text = s).into_owned(),
+            What::StartedWorking => t!("shell.feed.started_working").into_owned(),
+            What::Finished => t!("shell.feed.finished").into_owned(),
+            What::NewSession => t!("shell.feed.new_session").into_owned(),
+            What::Subagent(name) => t!("shell.feed.subagent", name = name).into_owned(),
+        }
+    }
 }
 
 /// Every message of the range again, fast-forwarded: comets on the map and lines in the feed.
@@ -117,6 +143,7 @@ pub struct Shell {
     feed_w: f32,
     feed_last: Instant,
     project_menu: bool,
+    language_menu: bool,
     menu_opens: u32,
     menu_scroll: crate::glide::Glide,
     tab_seg: crate::seg::Seg,
@@ -143,7 +170,7 @@ impl Shell {
         let timeline = cx.new(TimelineView::new);
         let dash = cx.new(DashView::new);
         let panel = cx.new(Panel::new);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search   /"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("shell.search").to_string()));
         let subs = vec![
             // One selection for the map, the timeline and the panel.
             cx.subscribe(&map, |s, map, e: &MapEvent, cx| match e {
@@ -240,6 +267,7 @@ impl Shell {
             feed_w: if saved.feed { FEED_OPEN_W } else { FEED_CLOSED_W },
             feed_last: Instant::now(),
             project_menu: false,
+            language_menu: false,
             menu_opens: 0,
             menu_scroll: crate::glide::Glide::default(),
             tab_seg: crate::seg::Seg::default(),
@@ -303,7 +331,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn feed_push(&mut self, ts: u64, color: Rgba, who: String, what: String, id: String) {
+    fn feed_push(&mut self, ts: u64, color: Rgba, who: String, what: What, id: String) {
         self.feed_seq += 1;
         self.feed.insert(0, FeedEvent { seq: self.feed_seq, ts, color, who, what, id });
         self.feed.truncate(FEED_MAX);
@@ -318,11 +346,8 @@ impl Shell {
         } else {
             blue()
         };
-        let what = format!(
-            "{}{}",
-            if m.kind == MsgKind::Report { "report · " } else { "" },
-            if m.summary.is_empty() { &m.text } else { &m.summary }
-        );
+        let text = if m.summary.is_empty() { &m.text } else { &m.summary }.clone();
+        let what = if m.kind == MsgKind::Report { What::Report(text) } else { What::Data(text) };
         self.feed_push(m.ts, color, format!("{} → {}", clip(&title(&m.from), 26), clip(&title(&m.to), 26)), what, m.from.clone());
     }
 
@@ -336,20 +361,23 @@ impl Shell {
             match before.get(n.id.as_str()) {
                 Some(o) if is_session(n) && n.live && o.status != n.status => {
                     if working(n) && !working(o) {
-                        let what = n.now.as_ref().map_or("started working".into(), |m| format!("{} · {}", m.tool, m.detail));
+                        let what = n
+                            .now
+                            .as_ref()
+                            .map_or(What::StartedWorking, |m| What::Data(format!("{} · {}", crate::state::tool_name(&m.tool), m.detail)));
                         self.feed_push(now, amber(), n.title.clone(), what, n.id.clone());
                     } else if !working(n) && working(o) {
-                        self.feed_push(now, text(), n.title.clone(), "finished its turn".into(), n.id.clone());
+                        self.feed_push(now, text(), n.title.clone(), What::Finished, n.id.clone());
                     }
                 }
                 Some(_) => {}
                 None if is_session(n) && recent(n.created_at) => {
-                    self.feed_push(n.created_at.max(1), violet(), n.title.clone(), "new session".into(), n.id.clone())
+                    self.feed_push(n.created_at.max(1), violet(), n.title.clone(), What::NewSession, n.id.clone())
                 }
                 None if n.kind == NodeKind::Agent && recent(n.created_at) => {
                     let parent = n.parent.clone().unwrap_or_default();
                     let who = new.nodes.iter().find(|p| p.id == parent).map_or_else(|| parent.clone(), |p| p.title.clone());
-                    self.feed_push(n.created_at.max(1), violet(), who, format!("spawned subagent · {}", n.title), parent);
+                    self.feed_push(n.created_at.max(1), violet(), who, What::Subagent(n.title.clone()), parent);
                 }
                 None => {}
             }
@@ -443,20 +471,25 @@ impl Shell {
                 .text_size(px(12.0))
                 .hover(|s| s.bg(panel_hi()))
         };
-        let tabs = [(Tab::Map, "Map"), (Tab::Timeline, "Timeline"), (Tab::Usage, "Usage"), (Tab::Machine, "Machine")]
-            .into_iter()
-            .map(|(tab, label)| {
-                button(format!("tab-{label}").into(), label.into(), self.tab == tab)
-                    .on_click(cx.listener(move |s, _, _, cx| s.set_tab(tab, cx)))
-                    .into_any_element()
-            })
-            .collect();
+        let tabs = [
+            (Tab::Map, t!("shell.tab.map")),
+            (Tab::Timeline, t!("shell.tab.timeline")),
+            (Tab::Usage, t!("shell.tab.usage")),
+            (Tab::Machine, t!("shell.tab.machine")),
+        ]
+        .into_iter()
+        .map(|(tab, label)| {
+            button(format!("tab-{}", tab.name()).into(), label.to_string().into(), self.tab == tab)
+                .on_click(cx.listener(move |s, _, _, cx| s.set_tab(tab, cx)))
+                .into_any_element()
+        })
+        .collect();
         let tab_index = [Tab::Map, Tab::Timeline, Tab::Usage, Tab::Machine].iter().position(|t| *t == self.tab).unwrap_or(0);
         let range_index = RANGES.iter().position(|r| r.1 == self.filters.range_h).unwrap_or(0);
         let ranges = RANGES
             .into_iter()
             .map(|(label, h)| {
-                button(format!("range-{label}").into(), label.into(), self.filters.range_h == h)
+                button(format!("range-{label}").into(), range_label(label).into(), self.filters.range_h == h)
                     .on_click(cx.listener(move |s, _, _, cx| s.filter(|f| f.range_h = h, cx)))
                     .into_any_element()
             })
@@ -464,7 +497,7 @@ impl Shell {
         // Rendered now: the closures below keep `cx` borrowed.
         let tabs = self.tab_seg.render(tab_index, tabs, window, cx);
         let ranges = self.range_seg.render(range_index, ranges, window, cx);
-        let toggle = |id: &'static str, label: &'static str, on: bool, flip: fn(&mut Filters)| {
+        let toggle = |id: &'static str, label: String, on: bool, flip: fn(&mut Filters)| {
             ctl(id, false)
                 .child(
                     div()
@@ -482,20 +515,20 @@ impl Shell {
             let sessions = v.nodes.iter().filter(|&&i| is_session(&g.nodes[i])).count();
             let agents = v.nodes.iter().filter(|&&i| g.nodes[i].kind == NodeKind::Agent).count();
             let messages = v.messages.iter().filter(|&&m| g.messages[m].kind == MsgKind::Message).count();
-            let stat = |n: usize, label: &str| {
+            let stat = |n: usize, key: &str| {
                 div()
                     .flex()
                     .gap(px(4.0))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(n.to_string()))
-                    .child(div().text_color(muted()).child(label.to_string()))
+                    .child(div().text_color(muted()).child(i18n::count(key, n as u64)))
             };
             div()
                 .flex()
                 .gap(px(12.0))
                 .text_size(px(12.0))
-                .child(stat(sessions, "sessions"))
-                .child(stat(messages, "messages"))
-                .child(stat(agents, "subagents"))
+                .child(stat(sessions, "shell.stats.sessions"))
+                .child(stat(messages, "shell.stats.messages"))
+                .child(stat(agents, "shell.stats.subagents"))
         });
 
         // Projects, the busiest first, in a menu under their button.
@@ -525,7 +558,7 @@ impl Shell {
                         s.filter(|f| f.project = pick, cx);
                     }))
             };
-            let mut rows = vec![row("p-all".into(), "All projects".into(), None, current.is_none())];
+            let mut rows = vec![row("p-all".into(), t!("shell.all_projects").into_owned(), None, current.is_none())];
             rows.extend(
                 projects
                     .iter()
@@ -568,7 +601,7 @@ impl Shell {
             .child(
                 ctl("project", current.is_some())
                     .max_w(px(150.0))
-                    .child(div().overflow_hidden().child(clip(current.as_deref().unwrap_or("All projects"), 16)))
+                    .child(div().overflow_hidden().child(clip(current.as_deref().unwrap_or(&t!("shell.all_projects")), 16)))
                     .child(div().text_color(muted()).child("▾"))
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.project_menu = !s.project_menu;
@@ -593,7 +626,7 @@ impl Shell {
         let replaying = self.replay.is_some();
         // The tabs come first and never move; the window's title already names the app. When the window is too
         // narrow for one row, the map's controls go to a second row, which wraps again if it must.
-        let one_row = !map_tab || f32::from(window.viewport_size().width) >= 1240.0;
+        let one_row = !map_tab || f32::from(window.viewport_size().width) >= 1320.0 + labels_extra(window);
         let narrow = f32::from(window.viewport_size().width) < NARROW;
         let panel_on = if narrow { self.panel_narrow_open } else { self.panel_open };
         let controls: Vec<AnyElement> = if map_tab {
@@ -601,8 +634,9 @@ impl Shell {
                 ranges.into_any_element(),
                 div().w(px(120.0)).flex_shrink_0().child(Input::new(&self.search)).into_any_element(),
                 project.into_any_element(),
-                toggle("archived", "Archived", self.filters.archived, |f| f.archived = !f.archived).into_any_element(),
-                toggle("agents", "Subagents", self.filters.agents, |f| f.agents = !f.agents).into_any_element(),
+                toggle("archived", t!("shell.archived").into_owned(), self.filters.archived, |f| f.archived = !f.archived)
+                    .into_any_element(),
+                toggle("agents", t!("shell.subagents").into_owned(), self.filters.agents, |f| f.agents = !f.agents).into_any_element(),
                 ctl("panel-toggle", panel_on)
                     .child(panel_icon(panel_on))
                     .on_click(cx.listener(move |s, _, _, cx| {
@@ -619,7 +653,7 @@ impl Shell {
                     }))
                     .into_any_element(),
                 ctl("replay", replaying)
-                    .child(if replaying { "■ Stop" } else { "▶ Replay" })
+                    .child(if replaying { t!("shell.stop") } else { t!("shell.replay") }.into_owned())
                     .on_click(cx.listener(|s, _, _, cx| {
                         if s.replay.take().is_none() {
                             s.start_replay(cx);
@@ -638,24 +672,26 @@ impl Shell {
             .items_center()
             .gap(px(12.0))
             .child(tabs)
-            .children(self.loader(wide))
             .children(stats.filter(|_| map_tab))
+            // The loader lies over the free room after the tabs and counters, whatever their width in this language.
+            .child(div().relative().self_stretch().w(px(0.0)).children(self.loader()))
             .child(div().flex_1());
+        let language = self.language_button(cx);
         let bar = div().px(px(16.0)).py(px(10.0)).border_b_1().border_color(line());
         if one_row {
-            bar.child(first.children(controls).children(update))
+            bar.child(first.children(controls).children(update).child(language))
         } else {
             bar.flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(first.children(update))
+                .child(first.children(update).child(language))
                 .child(div().flex().flex_wrap().items_center().gap(px(8.0)).children(controls))
         }
     }
 
     /// While the history is read after launch: how far it is, in the free room right of the tabs (laid over the bar,
     /// so nothing moves when it goes). The bar fills smoothly and the whole fades out once everything is read.
-    fn loader(&self, wide: bool) -> Option<Div> {
+    fn loader(&self) -> Option<Div> {
         let u = self.usage.as_ref()?;
         #[cfg(feature = "snapshot")]
         if crate::demo::on() {
@@ -664,36 +700,31 @@ impl Shell {
         if self.load_alpha <= 0.01 {
             return None;
         }
-        let label = if u.ready { "History read".to_string() } else { "Reading history".to_string() };
+        let label = if u.ready { t!("shell.history_read") } else { t!("shell.reading_history") }.into_owned();
         Some(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(if wide { 544.0 } else { 256.0 }))
-                .flex()
-                .items_center()
-                .opacity(self.load_alpha)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(5.0))
-                        .w(px(156.0))
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .text_size(px(11.0))
-                                .child(div().text_color(muted()).child(label))
-                                .child(div().font_family(MONO).text_color(faint()).child(format!("{:.0}%", self.load_fill * 100.0))),
-                        )
-                        .child(
-                            div().h(px(3.0)).w_full().rounded(px(2.0)).bg(rgba(0xffffff1a)).child(
-                                div().h_full().rounded(px(2.0)).w(relative(self.load_fill)).bg(if u.ready { green() } else { blue() }),
-                            ),
-                        ),
-                ),
+            div().absolute().top_0().bottom_0().left_0().flex().items_center().opacity(self.load_alpha).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.0))
+                    .w(px(180.0))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .text_size(px(11.0))
+                            .child(div().text_color(muted()).child(label))
+                            .child(div().font_family(MONO).text_color(faint()).child(format!("{:.0}%", self.load_fill * 100.0))),
+                    )
+                    .child(
+                        div()
+                            .h(px(3.0))
+                            .w_full()
+                            .rounded(px(2.0))
+                            .bg(rgba(0xffffff1a))
+                            .child(div().h_full().rounded(px(2.0)).w(relative(self.load_fill)).bg(if u.ready { green() } else { blue() })),
+                    ),
+            ),
         )
     }
 
@@ -703,10 +734,12 @@ impl Shell {
         use crate::update::State;
         let (ready, label, done) = match &self.update {
             State::Idle => return None,
-            State::Downloading { version, done } => (false, format!("Downloading v{version}… {:.0}%", done * 100.0), *done),
-            State::Ready { version, .. } => (true, format!("Update ready · v{version}"), 1.0),
+            State::Downloading { version, done } => {
+                (false, t!("shell.update.downloading", version = version, percent = format!("{:.0}", done * 100.0)).into_owned(), *done)
+            }
+            State::Ready { version, .. } => (true, t!("shell.update.ready", version = version).into_owned(), 1.0),
         };
-        let sub = if ready { "Click to restart and update." } else { "It installs when you click the green arrow." };
+        let sub = if ready { t!("shell.update.click_to_restart") } else { t!("shell.update.installs_on_click") }.into_owned();
         let color = if ready { green() } else { muted() };
         Some(
             div()
@@ -737,7 +770,7 @@ impl Shell {
                             .child(div().h_full().rounded(px(1.0)).w(relative(done)).bg(muted())),
                     )
                 })
-                .tooltip(move |_, cx| cx.new(|_| Tip(label.clone(), sub)).into())
+                .tooltip(move |_, cx| cx.new(|_| Tip(label.clone(), sub.clone())).into())
                 .on_click(cx.listener(|s, _, _, cx| {
                     if let State::Ready { file, .. } = &s.update {
                         match crate::update::apply(file) {
@@ -749,6 +782,98 @@ impl Shell {
                 .with_animation("update-in", Animation::new(Duration::from_millis(300)).with_easing(ease_in_out), |el, t| el.opacity(t))
                 .into_any_element(),
         )
+    }
+
+    /// The language, at the top right: the system's, or one picked in its menu (saved for the next launch).
+    fn language_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let chosen = cx.global::<Settings>().language.clone();
+        let menu = self.language_menu.then(|| {
+            let row = |id: &'static str, label: String, pick: Option<&'static str>| {
+                div()
+                    .id(id)
+                    .px(px(10.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .text_color(if chosen.as_deref() == pick { blue() } else { text() })
+                    .whitespace_nowrap()
+                    .hover(|s| s.bg(panel_hi()))
+                    .child(label)
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        s.language_menu = false;
+                        settings::set_language(cx, pick.map(str::to_string));
+                        // The search box keeps the text it was made with: give it this language's.
+                        s.search.update(cx, |input, cx| input.set_placeholder(t!("shell.search").to_string(), window, cx));
+                        cx.notify();
+                    }))
+            };
+            let system = t!("language.system", name = i18n::name(settings::system_language())).into_owned();
+            let mut rows = vec![row("lang-system", system, None)];
+            rows.extend(i18n::LANGUAGES.iter().map(|&(code, name)| row(code, name.to_string(), Some(code))));
+            deferred(
+                div()
+                    .id("language-menu")
+                    .absolute()
+                    .top(px(34.0))
+                    .right_0()
+                    .min_w(px(160.0))
+                    .occlude()
+                    .p(px(4.0))
+                    .rounded(px(10.0))
+                    .bg(panel())
+                    .border_1()
+                    .border_color(rgba(0xffffff1f))
+                    .shadow_lg()
+                    .children(rows)
+                    .on_mouse_down_out(cx.listener(|s, _, _, cx| {
+                        s.language_menu = false;
+                        cx.notify();
+                    }))
+                    .with_animation(
+                        SharedString::from(format!("language-menu-{}", self.menu_opens)),
+                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
+                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                    ),
+            )
+            .with_priority(1)
+        });
+        let on = self.language_menu;
+        div()
+            .relative()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id("language")
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(px(8.0))
+                    .bg(panel())
+                    .border_1()
+                    .border_color(if on { rgba(0x38bdf866) } else { line() })
+                    .text_color(if on { blue() } else { muted() })
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .hover(|s| s.bg(panel_hi()))
+                    .child(crate::icons::line(gpui_kit::assets::IconName::Languages, if on { blue() } else { muted() }, 14.0))
+                    .child(i18n::current().to_uppercase())
+                    // Not over its own open menu.
+                    .when(!on, |d| {
+                        d.tooltip(|_, cx| {
+                            cx.new(|_| Tip(t!("language.button").into_owned(), i18n::name(&i18n::current()).to_string())).into()
+                        })
+                    })
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.language_menu = !s.language_menu;
+                        s.menu_opens += 1;
+                        cx.notify();
+                    })),
+            )
+            .children(menu)
+            .into_any_element()
     }
 
     /// The live feed, at the bottom left of the map: the newest line slides in at the top.
@@ -781,7 +906,7 @@ impl Shell {
                         .min_w_0()
                         .overflow_hidden()
                         .child(div().truncate().child(e.who.clone()))
-                        .child(div().truncate().text_size(px(12.0)).text_color(muted()).child(e.what.clone())),
+                        .child(div().truncate().text_size(px(12.0)).text_color(muted()).child(e.what.say())),
                 )
                 .with_animation(
                     SharedString::from(format!("ev-in-{}", e.seq)),
@@ -802,7 +927,7 @@ impl Shell {
                         .text_size(px(12.0))
                         .text_color(faint())
                         .truncate()
-                        .child("Waiting for sessions to talk…"),
+                        .child(t!("shell.feed.waiting").into_owned()),
                 )
             })
             .with_animation(
@@ -839,7 +964,7 @@ impl Shell {
                     .text_color(faint())
                     .cursor_pointer()
                     .hover(|s| s.text_color(text()))
-                    .child("LIVE FEED")
+                    .child(t!("shell.feed.title").into_owned())
                     .child(if open { "▾" } else { "▸" })
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.feed_open = !s.feed_open;
@@ -859,7 +984,7 @@ impl Shell {
         let t = r.t0 + (frac as f64 * r.span as f64) as u64;
         let label = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, t as i64)
             .single()
-            .map(|d| d.format("%a %-d %b · %H:%M").to_string())
+            .map(|d| d.format(&i18n::names(&d, "%a %-d %b · %H:%M")).to_string())
             .unwrap_or_default();
         let bar = self.clock_bar.clone();
         Some(
@@ -901,13 +1026,14 @@ impl Shell {
         if v.nodes.iter().any(|&i| is_session(&g.nodes[i])) {
             return None;
         }
-        let (msg, act): (String, &str) = if !self.filters.query.is_empty() {
-            (format!("No session matches “{}”", self.search.read(cx).value().trim()), "Clear search")
+        let (msg, act) = if !self.filters.query.is_empty() {
+            (t!("shell.empty.no_match", query = self.search.read(cx).value().trim()), t!("shell.empty.clear_search"))
         } else if let Some(p) = &self.filters.project {
-            (format!("No session in {p} for this range"), "All projects")
+            (t!("shell.empty.none_in_project", project = p), t!("shell.all_projects"))
         } else {
-            ("No session in this range".into(), "Show all")
+            (t!("shell.empty.none"), t!("shell.empty.show_all"))
         };
+        let (msg, act) = (msg.into_owned(), act.into_owned());
         Some(
             div().absolute().top_0().bottom_0().left_0().right_0().flex().items_center().justify_center().child(
                 div()
@@ -950,6 +1076,62 @@ impl Shell {
             ),
         )
     }
+}
+
+/// A range's button: "3d" says "3 j" in French.
+fn range_label(label: &str) -> String {
+    match label {
+        "6h" => t!("shell.range.6h"),
+        "24h" => t!("shell.range.24h"),
+        "3d" => t!("shell.range.3d"),
+        "7d" => t!("shell.range.7d"),
+        "14d" => t!("shell.range.14d"),
+        "30d" => t!("shell.range.30d"),
+        "All" => t!("shell.range.all"),
+        other => other.into(),
+    }
+    .into_owned()
+}
+
+/// How wide `s` is drawn at `size`.
+fn text_w(window: &mut Window, s: String, size: f32, weight: FontWeight) -> f32 {
+    let mut font = window.text_style().font();
+    font.weight = weight;
+    let run = TextRun { len: s.len(), font, color: text().into(), background_color: None, underline: None, strikethrough: None };
+    f32::from(window.text_system().shape_line(s.into(), px(size), &[run], None).width())
+}
+
+/// The closed feed's width: its title in this language and the arrow.
+fn feed_closed_w(window: &mut Window) -> f32 {
+    FEED_CLOSED_W + text_w(window, t!("shell.feed.title").into_owned(), 10.5, FontWeight::SEMIBOLD)
+        - text_w(window, "LIVE FEED".into(), 10.5, FontWeight::SEMIBOLD)
+}
+
+/// How much wider the top bar's labels are in this language than in English, whose bar fits on one row from 1320 px.
+fn labels_extra(window: &mut Window) -> f32 {
+    const KEYS: [&str; 15] = [
+        "shell.tab.map",
+        "shell.tab.timeline",
+        "shell.tab.usage",
+        "shell.tab.machine",
+        "shell.range.6h",
+        "shell.range.24h",
+        "shell.range.3d",
+        "shell.range.7d",
+        "shell.range.14d",
+        "shell.range.30d",
+        "shell.range.all",
+        "shell.all_projects",
+        "shell.archived",
+        "shell.subagents",
+        "shell.replay",
+    ];
+    let mut extra = 0.0;
+    for key in KEYS {
+        extra += text_w(window, t!(key).into_owned(), 12.0, FontWeight::NORMAL)
+            - text_w(window, t!(key, locale = "en").into_owned(), 12.0, FontWeight::NORMAL);
+    }
+    extra.max(0.0)
 }
 
 /// "18:32".
@@ -1231,7 +1413,7 @@ impl Render for Shell {
             }
         }
         // The feed narrows to its title when closed, and widens back when opened.
-        let feed_target = if self.feed_open { FEED_OPEN_W } else { FEED_CLOSED_W };
+        let feed_target = if self.feed_open { FEED_OPEN_W } else { feed_closed_w(window) };
         if self.feed_w != feed_target {
             let now = Instant::now();
             self.feed_w = crate::glide::ease(self.feed_w, feed_target, (now - self.feed_last).as_secs_f32() * 0.7);
@@ -1300,7 +1482,7 @@ impl Render for Shell {
 }
 
 /// A small hover card: a title and a line under it.
-struct Tip(String, &'static str);
+struct Tip(String, String);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -1313,6 +1495,6 @@ impl Render for Tip {
             .text_size(px(12.0))
             .text_color(text())
             .child(div().font_weight(FontWeight::SEMIBOLD).child(self.0.clone()))
-            .child(div().text_color(muted()).child(self.1))
+            .child(div().text_color(muted()).child(self.1.clone()))
     }
 }
