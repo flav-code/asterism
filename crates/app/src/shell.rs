@@ -53,6 +53,9 @@ impl Tab {
 const PANEL_TAU: f32 = 0.06;
 const SLIDE_IN: Duration = Duration::from_millis(450);
 const FEED_MAX: usize = 7;
+/// The feed's width open, and closed (its title and arrow only).
+const FEED_OPEN_W: f32 = 380.0;
+const FEED_CLOSED_W: f32 = 118.0;
 
 /// One line of the live feed.
 struct FeedEvent {
@@ -106,9 +109,14 @@ pub struct Shell {
     feed_seq: u64,
     feed_open: bool,
     feed_clicks: u32,
+    /// The feed's width on screen: it narrows to its title when closed.
+    feed_w: f32,
+    feed_last: Instant,
     project_menu: bool,
     menu_opens: u32,
     menu_scroll: crate::glide::Glide,
+    tab_seg: crate::seg::Seg,
+    range_seg: crate::seg::Seg,
     replay: Option<Replay>,
     clock_bar: Rc<Cell<Bounds<Pixels>>>,
     _tasks: Vec<Task<()>>,
@@ -200,9 +208,13 @@ impl Shell {
             feed_seq: 0,
             feed_open: saved.feed,
             feed_clicks: 0,
+            feed_w: if saved.feed { FEED_OPEN_W } else { FEED_CLOSED_W },
+            feed_last: Instant::now(),
             project_menu: false,
             menu_opens: 0,
             menu_scroll: crate::glide::Glide::default(),
+            tab_seg: crate::seg::Seg::default(),
+            range_seg: crate::seg::Seg::default(),
             replay: None,
             clock_bar: Rc::default(),
             _tasks: vec![updates],
@@ -370,10 +382,7 @@ impl Shell {
         }
     }
 
-    fn header(&self, wide: bool, cx: &mut Context<Self>) -> Div {
-        let seg = |items: Vec<Stateful<Div>>| {
-            div().flex().items_center().p(px(2.0)).rounded(px(8.0)).bg(panel()).border_1().border_color(line()).children(items)
-        };
+    fn header(&self, wide: bool, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let button = |id: SharedString, label: SharedString, on: bool| {
             div()
                 .id(id)
@@ -384,7 +393,6 @@ impl Shell {
                 .text_size(px(12.0))
                 .text_color(if on { text() } else { muted() })
                 .hover(|s| s.text_color(text()))
-                .when(on, |d| d.bg(panel_hi()))
                 .child(label)
         };
         // A control with a border, lit when on.
@@ -410,15 +418,22 @@ impl Shell {
             .map(|(tab, label)| {
                 button(format!("tab-{label}").into(), label.into(), self.tab == tab)
                     .on_click(cx.listener(move |s, _, _, cx| s.set_tab(tab, cx)))
+                    .into_any_element()
             })
             .collect();
+        let tab_index = [Tab::Map, Tab::Timeline, Tab::Usage, Tab::Machine].iter().position(|t| *t == self.tab).unwrap_or(0);
+        let range_index = RANGES.iter().position(|r| r.1 == self.filters.range_h).unwrap_or(0);
         let ranges = RANGES
             .into_iter()
             .map(|(label, h)| {
                 button(format!("range-{label}").into(), label.into(), self.filters.range_h == h)
                     .on_click(cx.listener(move |s, _, _, cx| s.filter(|f| f.range_h = h, cx)))
+                    .into_any_element()
             })
             .collect();
+        // Rendered now: the closures below keep `cx` borrowed.
+        let tabs = self.tab_seg.render(tab_index, tabs, window, cx);
+        let ranges = self.range_seg.render(range_index, ranges, window, cx);
         let toggle = |id: &'static str, label: &'static str, on: bool, flip: fn(&mut Filters)| {
             ctl(id, false)
                 .child(
@@ -556,12 +571,12 @@ impl Shell {
             .py(px(10.0))
             .border_b_1()
             .border_color(line())
-            .child(seg(tabs))
+            .child(tabs)
             .children(self.loader(wide))
             .children(stats.filter(|_| map_tab))
             .child(div().flex_1())
             .when(map_tab, |d| {
-                d.child(seg(ranges))
+                d.child(ranges)
                     .child(div().w(px(120.0)).child(Input::new(&self.search)))
                     .child(project)
                     .child(toggle("archived", "Archived", self.filters.archived, |f| f.archived = !f.archived))
@@ -668,7 +683,15 @@ impl Shell {
             .overflow_hidden()
             .children(lines)
             .when(self.feed.is_empty(), |d| {
-                d.child(div().px(px(10.0)).py(px(4.0)).text_size(px(12.0)).text_color(faint()).child("Waiting for sessions to talk…"))
+                d.child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(4.0))
+                        .text_size(px(12.0))
+                        .text_color(faint())
+                        .truncate()
+                        .child("Waiting for sessions to talk…"),
+                )
             })
             .with_animation(
                 SharedString::from(format!("feed-{}", self.feed_clicks)),
@@ -682,7 +705,8 @@ impl Shell {
             .absolute()
             .left(px(16.0))
             .bottom(px(16.0))
-            .w(px(380.0))
+            .w(px(self.feed_w))
+            .overflow_hidden()
             .pt(px(10.0))
             .px(px(6.0))
             .pb(px(6.0))
@@ -1093,6 +1117,18 @@ impl Render for Shell {
                 crate::glide::again(window, cx);
             }
         }
+        // The feed narrows to its title when closed, and widens back when opened.
+        let feed_target = if self.feed_open { FEED_OPEN_W } else { FEED_CLOSED_W };
+        if self.feed_w != feed_target {
+            let now = Instant::now();
+            self.feed_w = crate::glide::ease(self.feed_w, feed_target, (now - self.feed_last).as_secs_f32() * 0.7);
+            if (self.feed_w - feed_target).abs() < 0.5 {
+                self.feed_w = feed_target;
+            } else {
+                crate::glide::again(window, cx);
+            }
+        }
+        self.feed_last = Instant::now();
         // The loader's bar slides to the share of history read; once all is read it fades out.
         if let Some(u) = self.usage.clone() {
             let now = Instant::now();
@@ -1123,7 +1159,7 @@ impl Render for Shell {
         };
         self.panel.update(cx, |p, _| p.active = map_tab && self.panel_w > 0.0);
         let wide = f32::from(window.viewport_size().width) >= 1700.0;
-        div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.0)).child(self.header(wide, cx)).child(
+        div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.0)).child(self.header(wide, window, cx)).child(
             div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().child(body)).when(map_tab && self.panel_w > 0.0, |d| {
                 d.child(
                     div()

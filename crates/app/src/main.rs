@@ -7,6 +7,7 @@ mod icons;
 mod layout;
 mod map;
 mod panel;
+mod seg;
 mod settings;
 mod shell;
 mod state;

@@ -84,6 +84,7 @@ pub struct MapView {
     seen: HashSet<String>,
     _breath: Task<()>,
     fades: glide::Fades,
+    titles_seg: crate::seg::Seg,
     /// A hash of each body's session id: the key of its fades.
     hashes: Vec<u64>,
     /// New bubbles are finding their place while the others hold still; these may move.
@@ -174,6 +175,7 @@ impl MapView {
             seen: HashSet::new(),
             _breath: breath,
             fades: glide::Fades::default(),
+            titles_seg: crate::seg::Seg::default(),
             hashes: Vec::new(),
             newcomers: HashSet::new(),
             #[cfg(feature = "snapshot")]
@@ -877,7 +879,6 @@ impl Render for MapView {
                 .cursor_pointer()
                 .text_size(px(12.0))
                 .text_color(if self.titles == mode { text() } else { muted() })
-                .when(self.titles == mode, |d| d.bg(panel_hi()))
                 .child(label)
                 .on_click(cx.listener(move |m, _, _, cx| {
                     m.titles = mode;
@@ -889,7 +890,11 @@ impl Render for MapView {
                     settings::change(cx, |s| s.titles = name.into());
                     cx.notify();
                 }))
+                .into_any_element()
         };
+        let titles_index = [Titles::Hover, Titles::Open, Titles::All].iter().position(|t| *t == self.titles).unwrap_or(0);
+        let titles_items = vec![titles_seg("Hover", Titles::Hover), titles_seg("Open", Titles::Open), titles_seg("All", Titles::All)];
+        let titles_control = self.titles_seg.render(titles_index, titles_items, window, cx);
 
         div()
             .id("map")
@@ -975,15 +980,10 @@ impl Render for MapView {
                     .left(px(12.0))
                     .flex()
                     .items_center()
-                    .p(px(2.0))
-                    .rounded(px(8.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(line())
-                    .child(div().px(px(8.0)).text_size(px(11.0)).text_color(faint()).child("Titles"))
-                    .child(titles_seg("Hover", Titles::Hover))
-                    .child(titles_seg("Open", Titles::Open))
-                    .child(titles_seg("All", Titles::All)),
+                    .gap(px(8.0))
+                    // The label sits outside the control: it names it, it is not one of its options.
+                    .child(div().text_size(px(11.0)).text_color(faint()).child("Titles"))
+                    .child(titles_control),
             )
             .child(legend())
             .children(tip)

@@ -39,6 +39,7 @@ pub struct Machine {
     clicks: HashMap<String, u32>,
     by_cpu: bool,
     owners_scroll: Glide,
+    sort_seg: crate::seg::Seg,
     sessions_scroll: Glide,
     _updates: Task<()>,
     #[cfg(feature = "snapshot")]
@@ -69,6 +70,7 @@ impl Machine {
             clicks: HashMap::new(),
             by_cpu: false,
             owners_scroll: Glide::default(),
+            sort_seg: crate::seg::Seg::default(),
             sessions_scroll: Glide::default(),
             _updates: updates,
             #[cfg(feature = "snapshot")]
@@ -124,7 +126,7 @@ impl Machine {
         }
     }
 
-    fn header(&self, r: &Report, cx: &mut Context<Self>) -> Div {
+    fn header(&self, r: &Report, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let toggle = |label: &'static str, on: bool, cpu_sort: bool| {
             div()
                 .id(label)
@@ -134,13 +136,19 @@ impl Machine {
                 .text_size(px(12.))
                 .cursor_pointer()
                 .text_color(if on { text() } else { muted() })
-                .when(on, |d| d.bg(panel_hi()))
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.by_cpu = cpu_sort;
                     cx.notify();
                 }))
+                .into_any_element()
         };
+        let sort = self.sort_seg.render(
+            usize::from(self.by_cpu),
+            vec![toggle("RAM", !self.by_cpu, false), toggle("CPU", self.by_cpu, true)],
+            window,
+            cx,
+        );
         let updated = ago(now_ms().saturating_sub(r.at) / 1000);
         div()
             .flex()
@@ -154,17 +162,7 @@ impl Machine {
             .child(div().text_size(px(12.)).text_color(faint()).child(format!("updated {updated} ago")))
             .child(div().flex_1())
             .child(div().text_size(px(12.)).text_color(faint()).child("Sort by"))
-            .child(
-                div()
-                    .flex()
-                    .p(px(2.))
-                    .rounded(px(8.))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(line())
-                    .child(toggle("RAM", !self.by_cpu, false))
-                    .child(toggle("CPU", self.by_cpu, true)),
-            )
+            .child(sort)
     }
 
     fn machine(&self, r: &Report) -> Div {
@@ -641,7 +639,7 @@ impl Render for Machine {
         #[cfg(not(feature = "snapshot"))]
         let _ = window;
         self.load_icons(&r, cx);
-        root.child(self.header(&r, cx))
+        root.child(self.header(&r, window, cx))
             .child(self.machine(&r))
             .child(div().flex().flex_1().min_h_0().child(self.owners(&r)).child(self.sessions(&r, cx)))
     }

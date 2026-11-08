@@ -402,6 +402,8 @@ pub struct DashView {
     mouse: Point<Pixels>,
     pub active: bool,
     anim: Anim,
+    range_seg: crate::seg::Seg,
+    metric_seg: crate::seg::Seg,
     started: Instant,
     _tick: Task<()>,
 }
@@ -451,6 +453,8 @@ impl DashView {
             mouse: Point::default(),
             active: false,
             anim: Anim::default(),
+            range_seg: crate::seg::Seg::default(),
+            metric_seg: crate::seg::Seg::default(),
             started: Instant::now(),
             _tick: tick,
         }
@@ -662,9 +666,6 @@ impl Render for DashView {
         if a.moving {
             crate::glide::again(window, cx);
         }
-        let seg = |items: Vec<Stateful<Div>>| {
-            div().flex().items_center().h(px(30.0)).p(px(2.0)).rounded(px(8.0)).bg(panel()).border_1().border_color(line()).children(items)
-        };
         let button = |id: String, label: &'static str, on: bool| {
             div()
                 .id(SharedString::from(id))
@@ -676,44 +677,50 @@ impl Render for DashView {
                 .cursor_pointer()
                 .text_size(px(12.0))
                 .text_color(if on { text() } else { muted() })
-                .when(on, |b| b.bg(panel_hi()).border_1().border_color(rgba(0xffffff1f)))
                 .child(label)
         };
         let ranges =
             [(Range::Today, "Today"), (Range::Days(7), "7d"), (Range::Days(30), "30d"), (Range::Days(90), "90d"), (Range::All, "All")]
                 .into_iter()
                 .map(|(r, label)| {
-                    button(format!("u-range-{label}"), label, self.range == r).on_click(cx.listener(move |v, _, _, cx| {
-                        v.range = r;
-                        settings::change(cx, |s| s.usage_range = label.to_lowercase());
-                        cx.notify();
-                    }))
+                    button(format!("u-range-{label}"), label, self.range == r)
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.range = r;
+                            settings::change(cx, |s| s.usage_range = label.to_lowercase());
+                            cx.notify();
+                        }))
+                        .into_any_element()
                 })
                 .collect();
         let metrics = [(Metric::Usd, "Value $"), (Metric::Out, "Output"), (Metric::All, "All tokens"), (Metric::Replies, "Replies")]
             .into_iter()
             .map(|(m, label)| {
-                button(format!("u-metric-{label}"), label, self.metric == m).on_click(cx.listener(move |v, _, _, cx| {
-                    v.metric = m;
-                    let name = match m {
-                        Metric::Usd => "usd",
-                        Metric::Out => "out",
-                        Metric::All => "all",
-                        Metric::Replies => "replies",
-                    };
-                    settings::change(cx, |s| s.usage_metric = name.into());
-                    cx.notify();
-                }))
+                button(format!("u-metric-{label}"), label, self.metric == m)
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.metric = m;
+                        let name = match m {
+                            Metric::Usd => "usd",
+                            Metric::Out => "out",
+                            Metric::All => "all",
+                            Metric::Replies => "replies",
+                        };
+                        settings::change(cx, |s| s.usage_metric = name.into());
+                        cx.notify();
+                    }))
+                    .into_any_element()
             })
             .collect();
+        let range_index =
+            [Range::Today, Range::Days(7), Range::Days(30), Range::Days(90), Range::All].iter().position(|r| *r == self.range).unwrap_or(2);
+        let metric_index = [Metric::Usd, Metric::Out, Metric::All, Metric::Replies].iter().position(|m| *m == self.metric).unwrap_or(0);
         let head = div()
             .flex()
             .items_center()
             .gap(px(10.0))
             .mb(px(14.0))
             .child(div().mr_auto().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).child("Token usage"))
-            .child(seg(ranges))
-            .child(seg(metrics));
+            .child(self.range_seg.render(range_index, ranges, window, cx))
+            .child(self.metric_seg.render(metric_index, metrics, window, cx));
 
         let pct = |x: f64| format!("{}%", if x.is_finite() { (x * 100.0).round() } else { 0.0 });
         let tile = |k: &str, v: String, s: String| {
