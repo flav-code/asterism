@@ -572,7 +572,6 @@ impl Render for Panel {
             .text_color(text())
             .overflow_y_scroll()
             .track_scroll(&self.scroll.handle)
-            .child(self.scroll.driver())
             .child(
                 // A new selection fades in and rises a little.
                 div().flex().flex_col().children(panes).with_animation(
@@ -581,5 +580,6 @@ impl Render for Panel {
                     |el, t| el.opacity(t).mt(px(6.0 * (1.0 - t))),
                 ),
             )
+            .child(self.scroll.driver())
     }
 }

@@ -294,7 +294,6 @@ impl Machine {
             .h_full()
             .overflow_y_scroll()
             .track_scroll(&self.owners_scroll.handle)
-            .child(self.owners_scroll.driver())
             .px(px(16.))
             .pb(px(16.))
             .child(div().pb(px(8.)).child(caption("WHO USES IT")))
@@ -326,6 +325,7 @@ impl Machine {
                     )
                     .child(bar(top(o) / max, kind_color(o.kind)))
             }))
+            .child(self.owners_scroll.driver())
     }
 
     fn session(&self, s: &SessionView, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -497,7 +497,6 @@ impl Machine {
             .h_full()
             .overflow_y_scroll()
             .track_scroll(&self.sessions_scroll.handle)
-            .child(self.sessions_scroll.driver())
             .pr(px(16.))
             .pb(px(16.))
             .child(caption(format!("SESSIONS · {}", r.sessions.len())))
@@ -509,6 +508,7 @@ impl Machine {
                         .map(|g| div().p(px(12.)).rounded(px(10.)).bg(panel()).border_1().border_color(line()).child(group(g))),
                 )
             })
+            .child(self.sessions_scroll.driver())
     }
 }
 

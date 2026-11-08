@@ -740,8 +740,8 @@ impl Render for TimelineView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll.handle)
-                    .child(self.scroll.driver())
-                    .child(body),
+                    .child(body)
+                    .child(self.scroll.driver()),
             )
             .children(tip.map(|t| t.text_size(px(13.0)).text_color(text())))
             .child(zoom_driver(cx.entity()))
@@ -799,14 +799,14 @@ fn zoom_driver(view: Entity<TimelineView>) -> impl IntoElement {
         move |_, _, window, _| {
             let view = view.clone();
             let line = window.line_height();
-            window.on_mouse_event(move |e: &ScrollEvent, phase, _, cx| {
+            window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture {
                     return;
                 }
                 view.update(cx, |t, cx| {
                     let b = t.chart.get();
                     let x = f32::from(e.position.x - b.origin.x);
-                    if !t.scroll.handle.bounds().contains(&e.position) || x < LEFT {
+                    if !t.scroll.handle.bounds().contains(&e.position) || !t.scroll.hovered(window) || x < LEFT {
                         return;
                     }
                     let d = e.delta.pixel_delta(line);

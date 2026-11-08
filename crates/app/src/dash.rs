@@ -1128,8 +1128,8 @@ impl Render for DashView {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll.handle)
-                    .child(self.scroll.driver())
-                    .child(content),
+                    .child(content)
+                    .child(self.scroll.driver()),
             )
             .children(tip.map(|t| t.text_size(px(13.0)).text_color(text())))
             .on_mouse_move(cx.listener(move |v, e: &MouseMoveEvent, _, cx| {

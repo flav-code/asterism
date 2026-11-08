@@ -21,6 +21,8 @@ pub struct Glide {
     /// Where the scroll is going, and when the last frame moved it.
     to: Rc<Cell<Option<(f32, Instant)>>>,
     bar: Rc<RefCell<Bar>>,
+    /// The list's area as the pointer sees it: not hovered when a menu or a card covers it.
+    hitbox: Rc<RefCell<Option<Hitbox>>>,
 }
 
 /// The scroll bar, drawn over the list's right edge: it shows while the list moves and for a second after, or when
@@ -73,7 +75,7 @@ impl Glide {
     fn paint_bar(&self, window: &mut Window) {
         let now = Instant::now();
         let y = f32::from(self.handle.offset().y);
-        let near = self.strip().contains(&window.mouse_position());
+        let near = self.strip().contains(&window.mouse_position()) && self.hovered(window);
         let (alpha, wide, moving) = {
             let mut bar = self.bar.borrow_mut();
             if (y - bar.last_y).abs() > 0.1 {
@@ -104,7 +106,11 @@ impl Glide {
         // The thumb can be grabbed; a press elsewhere on the strip jumps there.
         let glide = self.clone();
         window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Capture || e.button != MouseButton::Left || !glide.strip().contains(&e.position) {
+            if phase != DispatchPhase::Capture
+                || e.button != MouseButton::Left
+                || !glide.strip().contains(&e.position)
+                || !glide.hovered(window)
+            {
                 return;
             }
             let Some((t, _)) = glide.thumb(true) else { return };
@@ -147,20 +153,26 @@ impl Glide {
 
 impl Glide {
     /// An invisible child that catches the wheel and moves the scroll each frame.
+    /// Put it LAST in the list, so the scroll bar is drawn over the content.
     pub fn driver(&self) -> impl IntoElement {
-        let glide = self.clone();
-        // Painted after the list's content (deferred), so the scroll bar is drawn over it.
-        deferred(
-            canvas(
-                |_, _, _| {},
-                move |_, _, window, _| {
-                    glide.paint(window);
-                    glide.paint_bar(window);
-                },
-            )
-            .absolute()
-            .size_0(),
+        let (a, b) = (self.clone(), self.clone());
+        canvas(
+            move |_, window, _| {
+                let hitbox = window.insert_hitbox(a.handle.bounds(), HitboxBehavior::Normal);
+                *a.hitbox.borrow_mut() = Some(hitbox);
+            },
+            move |_, _, window, _| {
+                b.paint(window);
+                b.paint_bar(window);
+            },
         )
+        .absolute()
+        .size_0()
+    }
+
+    /// The pointer is over this list and nothing (a menu, a card) covers it there.
+    pub fn hovered(&self, window: &Window) -> bool {
+        self.hitbox.borrow().as_ref().is_some_and(|h| h.should_handle_scroll(window))
     }
 
     fn paint(&self, window: &mut Window) {
@@ -169,7 +181,13 @@ impl Glide {
         // Capture runs before GPUI's own scroll (in the bubble phase), which then never sees the notch.
         window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
             let m = e.modifiers;
-            if phase != DispatchPhase::Capture || !glide.handle.bounds().contains(&e.position) || off() || m.platform || m.control || m.alt
+            if phase != DispatchPhase::Capture
+                || !glide.handle.bounds().contains(&e.position)
+                || !glide.hovered(window)
+                || off()
+                || m.platform
+                || m.control
+                || m.alt
             {
                 return; // with a modifier, the wheel zooms
             }

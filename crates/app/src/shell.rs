@@ -496,7 +496,8 @@ impl Shell {
                     .max_h(px(360.0))
                     .overflow_y_scroll()
                     .track_scroll(&self.menu_scroll.handle)
-                    .child(self.menu_scroll.driver())
+                    // An open menu takes the pointer: nothing behind it scrolls or reacts.
+                    .occlude()
                     .p(px(4.0))
                     .rounded(px(10.0))
                     .bg(panel())
@@ -504,6 +505,7 @@ impl Shell {
                     .border_color(rgba(0xffffff1f))
                     .shadow_lg()
                     .children(rows)
+                    .child(self.menu_scroll.driver())
                     .on_mouse_down_out(cx.listener(|s, _, _, cx| {
                         s.project_menu = false;
                         cx.notify();
@@ -1030,7 +1032,9 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
                 }
             }
         }
-        while sent < w.count && ms >= sent as f32 * w.gap {
+        // MDB_WHEEL_DELAY: the first notch comes this many ms in (after a click, say).
+        let delay: f32 = std::env::var("MDB_WHEEL_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(0.0);
+        while sent < w.count && ms >= delay + sent as f32 * w.gap {
             let e = ScrollEvent {
                 position: w.at,
                 delta: ScrollDelta::Lines(point(0.0, w.lines)),
