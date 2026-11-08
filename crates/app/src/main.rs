@@ -2,6 +2,8 @@
 //! Two threads gather the data (the machine every 2 s; sessions, messages and usage from the files Claude Code
 //! keeps); the window only ever reads their latest result.
 mod dash;
+#[cfg(feature = "snapshot")]
+mod demo;
 mod glide;
 mod icons;
 mod layout;

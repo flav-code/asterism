@@ -172,6 +172,8 @@ impl Shell {
         let updates_task = cx.spawn(async move |this, cx| {
             while feed.changed().await.is_ok() {
                 let Some((graph, usage)) = feed.borrow_and_update().clone() else { continue };
+                #[cfg(feature = "snapshot")]
+                let graph = if crate::demo::on() { Arc::new(crate::demo::graph(&graph)) } else { graph };
                 let alive = this.update(cx, |s, cx| {
                     if let Some(old) = s.graph.clone()
                         && s.replay.is_none()

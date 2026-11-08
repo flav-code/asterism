@@ -85,8 +85,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          v=${{ needs.check.outputs.version }}
           cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          cat > ../notes.md <<EOF
+          ## Install
+
+          **macOS:** download \`Asterism-$v-macos-arm64.dmg\` (Apple silicon: M1 and later) or \`Asterism-$v-macos-x64.dmg\`
+          (Intel), open it and drag Asterism to Applications. The app is not signed yet: the first time, right-click it
+          and choose Open.
+
+          **Windows:** download \`Asterism-$v-windows-x64-setup.exe\` and run it. It installs for your user only, without
+          administrator rights (uninstall it from Settings > Apps). The installer is not signed yet: if SmartScreen
+          shows "Windows protected your PC", choose More info, then Run anyway. Windows support is new: please open an
+          issue if something looks wrong.
+
+          **Updates:** Asterism checks for new versions on its own. When one is ready, a green arrow shows at the top
+          right of the window: click it to restart on the new version.
+
+          Checksums are in \`SHA256SUMS.txt\`.
+          EOF
+          sed -i 's/^          //' ../notes.md
           TAG=$GITHUB_REF_NAME
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            && gh release upload "$TAG" * --clobber --repo "$GITHUB_REPOSITORY" \
-            || gh release create "$TAG" * --repo "$GITHUB_REPOSITORY" --title "Asterism ${{ needs.check.outputs.version }}" --generate-notes
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" * --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" * --repo "$GITHUB_REPOSITORY" --title "Asterism $v" --notes-file ../notes.md --generate-notes
+          fi
