@@ -703,7 +703,7 @@ impl Render for MapView {
             if !wanted || dim(b) {
                 continue;
             }
-            let title: SharedString = n.title.chars().take(34).collect::<String>().into();
+            let title: SharedString = clip(&n.title, 34).into();
             let width = f32::from(
                 window
                     .text_system()
@@ -750,7 +750,7 @@ impl Render for MapView {
                 if n.live { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM },
             ));
             if in_focus && let Some(m) = n.now.as_ref().filter(|_| working(n)) {
-                let line: SharedString = format!("⟳ {} · {}", m.tool, m.detail).chars().take(44).collect::<String>().into();
+                let line: SharedString = clip(&format!("⟳ {} · {}", m.tool, m.detail), 44).into();
                 scene.labels.push((point(c.x, rect.origin.y + px(h)), line, font_px * 0.95, amber(), true, FontWeight::NORMAL));
             }
             if far && self.subagents[b] > 0 {

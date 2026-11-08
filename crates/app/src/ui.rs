@@ -103,3 +103,8 @@ pub fn dot(color: Rgba) -> Div {
 pub fn chip(s: impl Into<SharedString>, color: Rgba) -> Div {
     div().flex_none().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(panel_hi()).text_size(px(11.)).text_color(color).child(s.into())
 }
+
+/// At most `n` characters, with "…" when cut.
+pub fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else { s.chars().take(n - 1).chain(['…']).collect() }
+}

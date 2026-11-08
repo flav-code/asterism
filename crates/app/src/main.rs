@@ -69,6 +69,8 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        // The inputs and other components follow the window's dark palette, not the system's light one.
+        gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
         let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
