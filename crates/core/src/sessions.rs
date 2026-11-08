@@ -2,9 +2,11 @@
 //! These formats are internal and undocumented: read only, unknown fields ignored, missing files tolerated.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -80,8 +82,8 @@ pub fn project_of(cwd: &str) -> String {
     base.rsplit(['/', '\\']).next().unwrap_or(base).to_string()
 }
 
-/// Desktop app sessions: every `local_*.json` under each app's `claude-code-sessions` folder.
-fn desktop_sessions(home: &Path) -> Vec<Value> {
+/// Desktop app session files: every `local_<session id>.json` under each app's `claude-code-sessions` folder.
+fn desktop_files(home: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for data in app_data_dirs(home) {
         for app in dir_entries(&data) {
@@ -94,7 +96,7 @@ fn desktop_sessions(home: &Path) -> Vec<Value> {
                     for f in dir_entries(&b) {
                         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default();
                         if name.starts_with("local_") && name.ends_with(".json") {
-                            out.extend(read_json(&f));
+                            out.push(f);
                         }
                     }
                 }
@@ -104,30 +106,93 @@ fn desktop_sessions(home: &Path) -> Vec<Value> {
     out
 }
 
-/// Every session that may be running: the live registry's, then recent desktop sessions it doesn't list
-/// (their process can still be found by its folder and start time).
-pub fn read_sessions(home: &Path, now_ms: u64) -> Vec<SessionMeta> {
-    let desktop = desktop_sessions(home);
-    let by_host = |id: &str| desktop.iter().find(|d| d.get("sessionId").and_then(Value::as_str) == Some(id));
-    let by_cli = |id: &str| desktop.iter().find(|d| d.get("cliSessionId").and_then(Value::as_str) == Some(id));
+const RECENT_MS: u64 = 2 * 86_400_000;
+/// What is kept of a desktop session file: they are large (they hold turn reports), and only these fields matter.
+const DESKTOP_KEYS: &[&str] = &[
+    "sessionId",
+    "cliSessionId",
+    "title",
+    "cwd",
+    "originCwd",
+    "isArchived",
+    "lastActivityAt",
+    "createdAt",
+    "worktreePath",
+    "writtenRepositories",
+    "folderWorktrees",
+    "shellFolders",
+];
+
+/// Reads the sessions on every sample without decoding everything each time: a desktop file is decoded again only
+/// when it changes, files idle for two days are skipped unless their session runs, transcripts are found once.
+#[derive(Default)]
+pub struct SessionReader {
+    desktop: HashMap<PathBuf, (Option<SystemTime>, u64, Value)>,
+    transcripts: HashMap<String, PathBuf>,
+}
+
+impl SessionReader {
+    /// Every session that may be running: the live registry's, then recent desktop sessions it doesn't list
+    /// (their process can still be found by its folder and start time).
+    pub fn read(&mut self, home: &Path, now_ms: u64) -> Vec<SessionMeta> {
+        let registry: Vec<Value> = dir_entries(&home.join(".claude/sessions")).filter_map(|f| read_json(&f)).collect();
+        let live: HashSet<String> = registry.iter().filter_map(|r| str_of(r, "hostSessionId")).collect();
+        let now = SystemTime::now();
+        let mut seen = HashSet::new();
+        for f in desktop_files(home) {
+            let Ok(md) = fs::metadata(&f) else { continue };
+            let modified = md.modified().ok();
+            let recent = modified.and_then(|m| now.duration_since(m).ok()).is_none_or(|age| age.as_millis() < u128::from(RECENT_MS));
+            let name = f.file_stem().and_then(|n| n.to_str()).unwrap_or_default();
+            if !recent && !live.contains(name) {
+                continue;
+            }
+            let unchanged = matches!(self.desktop.get(&f), Some((m, len, _)) if *m == modified && *len == md.len());
+            if !unchanged {
+                let Some(v) = read_json(&f) else { continue };
+                let small = DESKTOP_KEYS.iter().filter_map(|k| Some((k.to_string(), v.get(*k)?.clone()))).collect();
+                self.desktop.insert(f.clone(), (modified, md.len(), Value::Object(small)));
+            }
+            seen.insert(f);
+        }
+        self.desktop.retain(|f, _| seen.contains(f));
+        let desktop: Vec<&Value> = self.desktop.values().map(|(_, _, v)| v).collect();
+        let mut out = merge(&desktop, &registry, now_ms);
+
+        let folders: Vec<PathBuf> = dir_entries(&home.join(".claude/projects")).collect();
+        self.transcripts.retain(|_, p| p.is_file());
+        for s in &mut out {
+            if !self.transcripts.contains_key(&s.id)
+                && let Some(p) = folders.iter().map(|f| f.join(format!("{}.jsonl", s.id))).find(|p| p.is_file())
+            {
+                self.transcripts.insert(s.id.clone(), p);
+            }
+            s.transcript = self.transcripts.get(&s.id).cloned();
+        }
+        out
+    }
+}
+
+/// Registry entries with their desktop file, then the recent desktop sessions the registry doesn't list.
+fn merge(desktop: &[&Value], registry: &[Value], now_ms: u64) -> Vec<SessionMeta> {
+    let by_host = |id: &str| desktop.iter().copied().find(|d| d.get("sessionId").and_then(Value::as_str) == Some(id));
+    let by_cli = |id: &str| desktop.iter().copied().find(|d| d.get("cliSessionId").and_then(Value::as_str) == Some(id));
     let mut out: Vec<SessionMeta> = Vec::new();
 
-    for f in dir_entries(&home.join(".claude/sessions")) {
-        let Some(r) = read_json(&f) else { continue };
-        let (Some(id), Some(pid)) = (str_of(&r, "sessionId"), r.get("pid").and_then(Value::as_u64)) else { continue };
-        let host_id = str_of(&r, "hostSessionId");
+    for r in registry {
+        let (Some(id), Some(pid)) = (str_of(r, "sessionId"), r.get("pid").and_then(Value::as_u64)) else { continue };
+        let host_id = str_of(r, "hostSessionId");
         let d = host_id.as_deref().and_then(by_host).or_else(|| by_cli(&id));
-        let mut s = meta(d, Some(&r));
+        let mut s = meta(d, Some(r));
         s.id = id;
         s.pid = u32::try_from(pid).ok();
         s.host_id = host_id.or_else(|| d.and_then(|d| str_of(d, "sessionId")));
         s.kind =
-            if s.host_id.is_some() || str_of(&r, "entrypoint").is_some_and(|e| e.contains("desktop")) { "desktop" } else { "cli" }.into();
+            if s.host_id.is_some() || str_of(r, "entrypoint").is_some_and(|e| e.contains("desktop")) { "desktop" } else { "cli" }.into();
         out.push(s);
     }
 
-    const RECENT_MS: u64 = 2 * 86_400_000;
-    for d in &desktop {
+    for d in desktop.iter().copied() {
         let Some(id) = str_of(d, "cliSessionId") else { continue };
         let recent = d.get("lastActivityAt").and_then(Value::as_u64).is_some_and(|t| now_ms.saturating_sub(t) < RECENT_MS);
         let archived = d.get("isArchived").and_then(Value::as_bool).unwrap_or(false);
@@ -139,12 +204,6 @@ pub fn read_sessions(home: &Path, now_ms: u64) -> Vec<SessionMeta> {
         s.host_id = str_of(d, "sessionId");
         s.kind = "desktop".into();
         out.push(s);
-    }
-
-    let projects = home.join(".claude/projects");
-    let folders: Vec<PathBuf> = dir_entries(&projects).collect();
-    for s in &mut out {
-        s.transcript = folders.iter().map(|f| f.join(format!("{}.jsonl", s.id))).find(|p| p.is_file());
     }
     out
 }
@@ -201,10 +260,12 @@ pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity>
             continue;
         }
         let Ok(j) = serde_json::from_str::<Value>(line) else { continue };
+        // Only the conversation itself: other lines (request copies, progress) repeat calls that already ended.
+        let kind = j.get("type").and_then(Value::as_str);
         let since = j.get("timestamp").and_then(Value::as_str).and_then(iso_ms).unwrap_or(0);
         for b in j.pointer("/message/content").and_then(Value::as_array).into_iter().flatten() {
             match b.get("type").and_then(Value::as_str) {
-                Some("tool_use") => {
+                Some("tool_use") if kind == Some("assistant") => {
                     let (Some(id), Some(name)) = (str_of(b, "id"), str_of(b, "name")) else { continue };
                     let input = b.get("input").cloned().unwrap_or(Value::Null);
                     let detail = ["description", "command", "file_path", "pattern", "url", "query", "prompt", "title"]
@@ -216,7 +277,7 @@ pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity>
                     let command = (tool == "Bash").then(|| str_of(&input, "command")).flatten();
                     pending.push((id, Activity { tool, detail, command, since }));
                 }
-                Some("tool_result") => {
+                Some("tool_result") if kind == Some("user") => {
                     if let Some(id) = b.get("tool_use_id").and_then(Value::as_str) {
                         pending.retain(|(p, _)| p != id);
                     }
@@ -267,6 +328,9 @@ mod tests {
         assert_eq!((a.tool.as_str(), a.detail.as_str(), a.command.as_deref()), ("Bash", "Run the tests", Some("npx vitest run")));
         assert_eq!(a.since, iso_ms("2026-11-07T20:00:05Z").unwrap());
         assert!(activity_in(lines[..2].iter().copied()).is_none());
+        // a copy of an ended call in another kind of line (no timestamp) is not a new call
+        let copy = r#"{"type":"api-request-blob","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#;
+        assert!(activity_in([lines[0], lines[1], copy].into_iter()).is_none());
         let mcp = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"mcp__browser__navigate","input":{"url":"https://example.com"}}]}}"#;
         assert_eq!(activity_in([mcp].into_iter()).unwrap().tool, "navigate");
     }

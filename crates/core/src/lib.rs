@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Monitor {
     host: host::HostSampler,
     docker: docker::DockerSampler,
+    sessions: sessions::SessionReader,
     home: PathBuf,
     /// Transcript → (its size when read, what it showed): a transcript is read again only when it grows.
     activities: HashMap<PathBuf, (u64, Option<sessions::Activity>)>,
@@ -26,7 +27,7 @@ impl Default for Monitor {
     fn default() -> Self {
         #[allow(deprecated)] // fixed on every OS since Rust 1.85; the deprecation note lags behind
         let home = std::env::home_dir().unwrap_or_default();
-        Self { host: Default::default(), docker: Default::default(), home, activities: HashMap::new() }
+        Self { host: Default::default(), docker: Default::default(), sessions: Default::default(), home, activities: HashMap::new() }
     }
 }
 
@@ -36,7 +37,7 @@ impl Monitor {
         let host = self.host.host();
         let docker = self.docker.sample(&self.home).await;
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        let sessions = sessions::read_sessions(&self.home, at);
+        let sessions = self.sessions.read(&self.home, at);
 
         let mut activities = HashMap::new();
         let mut cache = HashMap::new();

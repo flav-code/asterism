@@ -115,6 +115,17 @@ pub fn readable(cmd: &str) -> String {
     cmd.to_string()
 }
 
+/// A command as people read it: the program by its name, not its full path ("/opt/x/bin/uv tool run" → "uv tool run").
+/// The program is everything before the first option, since app paths hold spaces.
+pub fn short_program(cmd: &str) -> String {
+    if !(cmd.starts_with('/') || cmd.starts_with('~') || cmd.get(1..3) == Some(":\\")) {
+        return cmd.to_string();
+    }
+    let program = cmd.split(" -").next().unwrap_or(cmd);
+    let name_at = program.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    cmd[name_at..].to_string()
+}
+
 /// The folders given with `--add-dir`.
 // shortcut: ps-style command lines join argv with spaces, so a folder whose name holds " -" is cut there.
 pub fn add_dirs(cmd: &str) -> Vec<String> {
@@ -221,6 +232,10 @@ mod tests {
         assert_eq!(add_dirs(cmd), ["/Users/me/Library/Application Support/notes"]);
         let wrapped = r#"/bin/zsh -c source /home/me/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval 'docker run -e A='"'"'b c'"'"' x' < /dev/null && pwd -P >| /tmp/claude-1-cwd"#;
         assert_eq!(readable(wrapped), "$ docker run -e A='b c' x");
+        assert_eq!(short_program("~/Library/Application Support/App/claude.app/Contents/MacOS/claude --verbose"), "claude --verbose");
+        assert_eq!(short_program("/opt/homebrew/bin/uv tool uvx --python 3.12"), "uv tool uvx --python 3.12");
+        assert_eq!(short_program("/Applications/Some Browser.app/Contents/MacOS/Some Browser"), "Some Browser");
+        assert_eq!(short_program("node /src/server.js"), "node /src/server.js");
         assert!(is_docker_cli("/usr/local/bin/docker compose up -d"));
         assert!(!is_docker_cli("/usr/local/bin/dockerd"));
     }

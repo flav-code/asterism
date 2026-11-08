@@ -3,7 +3,7 @@
 use crate::docker::{COMPOSE_DIR, COMPOSE_FILES, COMPOSE_PROJECT, Container, DockerInfo, GROUP_LABELS};
 use crate::host::{Host, Proc};
 use crate::sessions::{Activity, SessionMeta};
-use crate::text::{add_dirs, is_claude, is_docker_cli, is_heavy, is_shown_build, readable, redact, resume_of};
+use crate::text::{add_dirs, is_claude, is_docker_cli, is_heavy, is_shown_build, readable, redact, resume_of, short_program};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -501,7 +501,7 @@ pub fn attribute(inp: Inputs) -> Report {
         age: now_s.saturating_sub(p.start),
         heavy,
         detached,
-        cmd: redact(&readable(&p.cmd), inp.home, CMD_MAX),
+        cmd: short_program(&redact(&readable(&p.cmd), inp.home, CMD_MAX)),
     };
     let mut views: Vec<SessionView> = Vec::new();
     // Per session: the docker commands under the process running its current call, whose containers it also costs.
@@ -526,7 +526,7 @@ pub fn attribute(inp: Inputs) -> Report {
                     builds.push(Build {
                         pid: Some(pid),
                         container: None,
-                        cmd: redact(&readable(&p.cmd), inp.home, CMD_MAX),
+                        cmd: short_program(&redact(&readable(&p.cmd), inp.home, CMD_MAX)),
                         cpu: c,
                         mem: m,
                         age: now_s.saturating_sub(p.start),
@@ -687,7 +687,8 @@ pub fn attribute(inp: Inputs) -> Report {
         } else {
             (containers.iter().map(|c| c.cpu).sum::<f32>() - attached_cpu, containers.iter().map(|c| c.mem).sum::<u64>() - attached_mem)
         };
-        owners.push(Owner { kind: OwnerKind::Docker, name: docker_name.clone(), session: None, cpu, mem, procs: 0 });
+        let name = if vm_mem > 0 { format!("{docker_name} VM") } else { docker_name.clone() };
+        owners.push(Owner { kind: OwnerKind::Docker, name, session: None, cpu, mem, procs: 0 });
     }
     owners.retain(|o| o.mem > 0 || o.cpu > 0.0);
     owners.sort_by(|a, b| b.mem.cmp(&a.mem).then(b.cpu.total_cmp(&a.cpu)));

@@ -3,7 +3,7 @@
   "home": "/Users/me",
   "at": 1794100000000,
   "host": { "ncpu": 18, "cpu": 1450, "memory": { "total": 51539607552, "used": 47000000000, "compressed": 18000000000, "swap_total": 6442450944, "swap_used": 5700000000, "pressure": "critical" } },
-  "docker": { "name": "Example Linux VM", "ncpu": 15, "mem": 25769803776 },
+  "docker": { "name": "Example Linux", "ncpu": 15, "mem": 25769803776 },
   "procs": [
     { "pid": 1, "ppid": 0, "name": "launchd", "cmd": "/sbin/launchd", "exe": "/sbin/launchd", "cpu": 0.2, "mem": 20000000, "start": 1793700000 },
     { "pid": 50, "ppid": 1, "name": "logd", "cmd": "/usr/libexec/logd", "exe": "/usr/libexec/logd", "cpu": 1.0, "mem": 30000000, "start": 1793700000 },
