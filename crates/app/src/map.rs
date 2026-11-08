@@ -939,17 +939,33 @@ impl Render for MapView {
                     cx.notify();
                 }),
             )
+            // As in Figma: on a trackpad two fingers move the map and a pinch zooms (⌘ or ctrl with two fingers zooms
+            // too); a mouse wheel zooms, sliding from notch to notch.
             .on_scroll(cx.listener(|m, e: &ScrollEvent, window, cx| {
-                let dy = f32::from(e.delta.pixel_delta(window.line_height()).y);
+                let d = e.delta.pixel_delta(window.line_height());
                 let o = m.canvas.get().origin;
                 let at = (f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
-                let to = (m.zoom.map_or(m.k, |z| z.0) * (dy * 0.003).exp()).clamp(0.12, 5.0);
-                if e.delta.precise() || glide::off() {
+                let zoom_key = e.modifiers.platform || e.modifiers.control;
+                if e.delta.precise() && !zoom_key {
                     m.zoom = None;
-                    m.zoom_at(to, at);
+                    (m.tx, m.ty) = (m.tx + f32::from(d.x), m.ty + f32::from(d.y));
                 } else {
-                    m.zoom = Some((to, at, Instant::now()));
+                    let to = (m.zoom.map_or(m.k, |z| z.0) * (f32::from(d.y) * 0.003).exp()).clamp(0.12, 5.0);
+                    if e.delta.precise() || glide::off() {
+                        m.zoom = None;
+                        m.zoom_at(to, at);
+                    } else {
+                        m.zoom = Some((to, at, Instant::now()));
+                    }
                 }
+                glide::trace("pan_x", m.tx);
+                cx.notify();
+            }))
+            .on_pinch(cx.listener(|m, e: &PinchEvent, _, cx| {
+                let o = m.canvas.get().origin;
+                let at = (f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
+                m.zoom = None;
+                m.zoom_at((m.k * (1.0 + e.delta)).clamp(0.12, 5.0), at);
                 cx.notify();
             }))
             .child(

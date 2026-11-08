@@ -1039,7 +1039,16 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
                 ..Default::default()
             };
             eprintln!("trace notch {ms:.1} {}", w.lines);
-            window.dispatch_event(PlatformInput::Scroll(e), cx);
+            // MDB_PINCH: a pinch of `lines` (0.1 = +10%) instead; MDB_WHEEL_PRECISE: a trackpad swipe of `lines` px.
+            if std::env::var("MDB_PINCH").is_ok() {
+                let pinch = PinchEvent { position: w.at, delta: w.lines, modifiers: Modifiers::default(), phase: TouchPhase::Moved };
+                window.dispatch_event(PlatformInput::Pinch(pinch), cx);
+            } else if std::env::var("MDB_WHEEL_PRECISE").is_ok() {
+                let swipe = ScrollEvent { delta: ScrollDelta::Pixels(point(px(w.lines), px(w.lines / 2.0))), ..e };
+                window.dispatch_event(PlatformInput::Scroll(swipe), cx);
+            } else {
+                window.dispatch_event(PlatformInput::Scroll(e), cx);
+            }
             sent += 1;
         }
         let mut saved = saved;
