@@ -6,6 +6,7 @@ mod layout;
 mod map;
 mod shell;
 mod state;
+mod timeline;
 mod ui;
 mod view;
 

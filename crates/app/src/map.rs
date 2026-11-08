@@ -2,7 +2,7 @@
 //! they send, and to their subagents. Positions are kept between launches so the map looks the same each time.
 use crate::glide;
 use crate::layout::{Body, Link, Sim};
-use crate::state::{Filters, is_session, project_colors, visible, working};
+use crate::state::{Filters, is_session, node_tip, project_colors, visible, working};
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
 use gpui_kit::prelude::*;
@@ -113,10 +113,6 @@ fn jitter(id: &str) -> (f32, f32) {
 
 fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     Rgba { r: a.r * t + b.r * (1.0 - t), g: a.g * t + b.g * (1.0 - t), b: a.b * t + b.b * (1.0 - t), a: 1.0 }
-}
-
-fn alpha(c: Rgba, a: f32) -> Rgba {
-    Rgba { a: c.a * a, ..c }
 }
 
 impl MapView {
@@ -803,34 +799,7 @@ impl Render for MapView {
         }
 
         let canvas_bounds = self.canvas.clone();
-        let tip = self.hover.map(|b| {
-            let n = &g.nodes[self.node_of[b]];
-            let state = if working(n) {
-                "working"
-            } else if n.live {
-                "open"
-            } else {
-                n.status.as_str()
-            };
-            let ago_s = now.saturating_sub(n.last_at) / 1000;
-            let pos = self.mouse - self.canvas.get().origin;
-            div()
-                .absolute()
-                .left(pos.x + px(14.0))
-                .top(pos.y + px(14.0))
-                .max_w(px(340.0))
-                .p(px(10.0))
-                .rounded(px(10.0))
-                .bg(rgba(0x11121ad0))
-                .border_1()
-                .border_color(line())
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(n.title.clone()))
-                .child(div().text_size(px(12.0)).text_color(muted()).child(format!("{state} · {} · {} ago", n.project, ago(ago_s))))
-                .children(n.now.as_ref().map(|m| div().text_size(px(12.0)).child(format!("{} · {}", m.tool, m.detail))))
-        });
+        let tip = self.hover.map(|b| node_tip(&g.nodes[self.node_of[b]], self.mouse - self.canvas.get().origin, now));
 
         let titles_seg = |label: &'static str, mode: Titles| {
             div()

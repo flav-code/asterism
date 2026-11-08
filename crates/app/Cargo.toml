@@ -14,6 +14,7 @@ tokio = { version = "1.54.1", features = ["rt", "time", "sync", "net"] }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", optional = true, features = ["test-support"] }
 sysinfo = "0.40.1"
 serde_json = "1.0.154"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [features]
 snapshot = ["dep:gpui_platform"]

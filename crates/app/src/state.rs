@@ -1,4 +1,6 @@
 //! What the views share: the filters, and which sessions, links and messages they let through.
+use crate::ui::*;
+use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mdb_core::graph::{Graph, Node, NodeKind};
 use std::collections::{HashMap, HashSet};
@@ -126,4 +128,35 @@ pub fn project_colors(g: &Graph) -> HashMap<String, Rgba> {
     let mut list: Vec<(&str, usize)> = counts.into_iter().collect();
     list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
     list.into_iter().enumerate().map(|(i, (p, _))| (p.to_string(), rgb(PALETTE[i % PALETTE.len()]))).collect()
+}
+
+/// What a session or subagent is doing, in a few words.
+pub fn state_of(n: &Node) -> &'static str {
+    match n.kind {
+        NodeKind::Agent => {
+            if n.live {
+                "running"
+            } else {
+                "done"
+            }
+        }
+        NodeKind::Remote => "on another machine",
+        NodeKind::Ghost => "not on this Mac anymore",
+        _ if working(n) => "working",
+        _ if n.live => "idle · open",
+        _ if n.archived => "archived",
+        _ => "closed",
+    }
+}
+
+/// The hover card of a session or subagent.
+pub fn node_tip(n: &Node, pos: Point<Pixels>, now: u64) -> Div {
+    let kind = n.agent_type.as_deref().filter(|_| n.kind == NodeKind::Agent).map(|t| format!("{t} · ")).unwrap_or_default();
+    let ago_s = now.saturating_sub(n.last_at) / 1000;
+    tip_card(pos)
+        .child(div().font_weight(FontWeight::SEMIBOLD).child(clip(&n.title, 70)))
+        .child(div().text_size(px(12.0)).text_color(muted()).child(format!("{kind}{} · {} · {} ago", state_of(n), n.project, ago(ago_s))))
+        .children(n.now.as_ref().filter(|_| working(n)).map(|m| {
+            div().font_family(MONO).text_size(px(11.0)).text_color(amber()).child(clip(&format!("{} · {}", m.tool, m.detail), 90))
+        }))
 }

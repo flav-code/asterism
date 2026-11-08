@@ -1,6 +1,7 @@
 //! The window: a header (counters, tabs, range, search, filters) above the tab on screen.
 use crate::map::{MapEvent, MapView};
 use crate::state::{Filters, RANGES, norm, visible};
+use crate::timeline::{TimelineEvent, TimelineView};
 use crate::ui::blue; // over gpui's color of the same name
 use crate::ui::*;
 use crate::view::Machine;
@@ -27,6 +28,7 @@ pub struct Shell {
     graph: Option<Arc<Graph>>,
     usage: Option<Arc<UsageView>>,
     map: Entity<MapView>,
+    timeline: Entity<TimelineView>,
     machine: Entity<Machine>,
     search: Entity<InputState>,
     _tasks: Vec<Task<()>>,
@@ -38,10 +40,23 @@ pub struct Shell {
 impl Shell {
     pub fn new(machine: Entity<Machine>, mut feed: GraphFeed, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let map = cx.new(MapView::new);
+        let timeline = cx.new(TimelineView::new);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search   /"));
         let subs = vec![
-            cx.subscribe(&map, |_, _, e: &MapEvent, cx| match e {
-                MapEvent::Select => cx.notify(),
+            // One selection for both views.
+            cx.subscribe(&map, |s, map, e: &MapEvent, cx| match e {
+                MapEvent::Select => {
+                    let sel = map.read(cx).selected.clone();
+                    s.timeline.update(cx, |t, _| t.selected = sel);
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&timeline, |s, timeline, e: &TimelineEvent, cx| match e {
+                TimelineEvent::Select => {
+                    let sel = timeline.read(cx).selected.clone();
+                    s.map.update(cx, |m, _| m.selected = sel);
+                    cx.notify();
+                }
             }),
             cx.subscribe_in(&search, window, |s, input, e: &InputEvent, _, cx| {
                 if let InputEvent::Change = e {
@@ -72,12 +87,15 @@ impl Shell {
         if let Ok(range) = std::env::var("MDB_RANGE") {
             filters.range_h = RANGES.iter().find(|(label, _)| *label == range).map_or(filters.range_h, |r| r.1);
         }
+        map.update(cx, |m, _| m.active = tab == Tab::Map);
+        timeline.update(cx, |t, _| t.active = tab == Tab::Timeline);
         Shell {
             tab,
             filters,
             graph: None,
             usage: None,
             map,
+            timeline,
             machine,
             search,
             _tasks: vec![updates],
@@ -91,7 +109,8 @@ impl Shell {
     fn push(&mut self, cx: &mut Context<Self>) {
         if let Some(g) = self.graph.clone() {
             let filters = self.filters.clone();
-            self.map.update(cx, |m, cx| m.set_graph(g, &filters, cx));
+            self.map.update(cx, |m, cx| m.set_graph(g.clone(), &filters, cx));
+            self.timeline.update(cx, |t, cx| t.set_graph(g, &filters, cx));
         }
         cx.notify();
     }
@@ -99,6 +118,7 @@ impl Shell {
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;
         self.map.update(cx, |m, _| m.active = tab == Tab::Map);
+        self.timeline.update(cx, |t, _| t.active = tab == Tab::Timeline);
         cx.notify();
     }
 
@@ -264,7 +284,7 @@ impl Shell {
         let ready = match self.tab {
             Tab::Map => self.map.read(cx).settled(),
             Tab::Machine => self.machine.read(cx).ready(),
-            _ => false,
+            _ => self.graph.is_some(),
         };
         if self.snapshot_taken || !ready {
             window.request_animation_frame();
@@ -307,7 +327,7 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
             let e = ScrollEvent {
                 position: w.at,
                 delta: ScrollDelta::Lines(point(0.0, w.lines)),
-                modifiers: Modifiers::default(),
+                modifiers: Modifiers { platform: std::env::var("MDB_WHEEL_MODS").is_ok_and(|m| m.contains("cmd")), ..Default::default() },
                 touch_phase: TouchPhase::Moved,
                 ..Default::default()
             };
@@ -342,7 +362,8 @@ impl Render for Shell {
         let body: AnyElement = match self.tab {
             Tab::Map => self.map.clone().into_any_element(),
             Tab::Machine => self.machine.clone().into_any_element(),
-            Tab::Timeline | Tab::Usage => {
+            Tab::Timeline => self.timeline.clone().into_any_element(),
+            Tab::Usage => {
                 div().size_full().flex().items_center().justify_center().text_color(muted()).child("Coming next").into_any_element()
             }
         };

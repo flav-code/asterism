@@ -65,6 +65,8 @@ pub struct Node {
     pub live: bool,
     /// busy, idle, offline (closed), done (a finished subagent), remote, gone.
     pub status: String,
+    /// When a live session's status last changed, in ms (0: unknown).
+    pub status_at: u64,
     pub model: Option<String>,
     pub profile: Option<String>,
     pub branch: Option<String>,
@@ -224,6 +226,7 @@ struct Registered {
     started: u64,
     updated: u64,
     status: Option<String>,
+    status_at: u64,
     host: Option<String>,
     names: Vec<String>,
     socket: Option<String>,
@@ -246,6 +249,7 @@ fn registry(home: &Path) -> Vec<Registered> {
                 started: u("startedAt"),
                 updated: u("updatedAt"),
                 status: s("status"),
+                status_at: u("statusUpdatedAt"),
                 host: s("hostSessionId"),
                 names,
                 socket: s("messagingSocketPath"),
@@ -298,6 +302,7 @@ fn node(id: &str, kind: NodeKind, title: &str, project: &str) -> Node {
         archived: false,
         live: false,
         status: "offline".into(),
+        status_at: 0,
         model: None,
         profile: None,
         branch: None,
@@ -439,6 +444,7 @@ impl Visualizer {
             if live.contains(&r.pid) {
                 n.live = true;
                 n.status = r.status.clone().unwrap_or_else(|| "idle".into());
+                n.status_at = r.status_at;
                 n.pid = Some(r.pid);
                 n.last_at = n.last_at.max(r.updated);
             }

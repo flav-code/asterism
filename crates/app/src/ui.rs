@@ -108,3 +108,57 @@ pub fn chip(s: impl Into<SharedString>, color: Rgba) -> Div {
 pub fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else { s.chars().take(n - 1).chain(['…']).collect() }
 }
+
+pub fn alpha(c: Rgba, a: f32) -> Rgba {
+    Rgba { a: c.a * a, ..c }
+}
+
+/// Paints one line of text whose box starts `align` of its width left of `x` (0 left, 0.5 centered) and whose
+/// middle is at `y`. Returns its width.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_text(
+    window: &mut Window,
+    cx: &mut App,
+    text: SharedString,
+    (x, y): (Pixels, Pixels),
+    align: f32,
+    size: f32,
+    color: Rgba,
+    weight: FontWeight,
+    mono: bool,
+) -> Pixels {
+    let mut font = window.text_style().font();
+    font.weight = weight;
+    if mono {
+        font.family = MONO.into();
+    }
+    let run = TextRun { len: text.len(), font, color: color.into(), background_color: None, underline: None, strikethrough: None };
+    let line = window.text_system().shape_line(text, px(size), &[run], None);
+    let (w, lh) = (line.width(), px(size * 1.25));
+    line.paint(point(x - w * align, y - lh / 2.0), lh, TextAlign::Left, None, window, cx).ok();
+    w
+}
+
+/// The box of a hover card, placed `pos` from its parent's top left.
+pub fn tip_card(pos: Point<Pixels>) -> Div {
+    div()
+        .absolute()
+        .left(pos.x + px(14.0))
+        .top(pos.y + px(14.0))
+        .max_w(px(340.0))
+        .p(px(10.0))
+        .rounded(px(10.0))
+        .bg(rgba(0x11121ad0))
+        .border_1()
+        .border_color(line())
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+}
+
+/// "14:05" today, "6 Nov 14:05" another day.
+pub fn when(ms: u64) -> String {
+    use chrono::{Local, TimeZone};
+    let Some(t) = Local.timestamp_millis_opt(ms as i64).single() else { return String::new() };
+    if t.date_naive() == Local::now().date_naive() { t.format("%H:%M").to_string() } else { t.format("%-d %b %H:%M").to_string() }
+}

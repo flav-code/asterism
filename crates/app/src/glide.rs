@@ -34,8 +34,10 @@ impl Glide {
         let line = window.line_height();
         // Capture runs before GPUI's own scroll (in the bubble phase), which then never sees the notch.
         window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
-            if phase != DispatchPhase::Capture || !glide.handle.bounds().contains(&e.position) || off() {
-                return;
+            let m = e.modifiers;
+            if phase != DispatchPhase::Capture || !glide.handle.bounds().contains(&e.position) || off() || m.platform || m.control || m.alt
+            {
+                return; // with a modifier, the wheel zooms
             }
             if e.delta.precise() {
                 glide.to.set(None); // a trackpad took over: stop gliding against it
