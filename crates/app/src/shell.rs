@@ -108,6 +108,7 @@ pub struct Shell {
     feed_clicks: u32,
     project_menu: bool,
     menu_opens: u32,
+    menu_scroll: crate::glide::Glide,
     replay: Option<Replay>,
     clock_bar: Rc<Cell<Bounds<Pixels>>>,
     _tasks: Vec<Task<()>>,
@@ -201,6 +202,7 @@ impl Shell {
             feed_clicks: 0,
             project_menu: false,
             menu_opens: 0,
+            menu_scroll: crate::glide::Glide::default(),
             replay: None,
             clock_bar: Rc::default(),
             _tasks: vec![updates],
@@ -493,6 +495,8 @@ impl Shell {
                     .min_w(px(180.0))
                     .max_h(px(360.0))
                     .overflow_y_scroll()
+                    .track_scroll(&self.menu_scroll.handle)
+                    .child(self.menu_scroll.driver())
                     .p(px(4.0))
                     .rounded(px(10.0))
                     .bg(panel())
@@ -947,6 +951,7 @@ fn launch_frames(window: &mut Window) {
 thread_local! {
     static LAUNCH_SAVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static CLICKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DRAG_STEP: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(feature = "snapshot")]
@@ -978,6 +983,53 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
             let up = MouseUpEvent { button: MouseButton::Left, position, click_count: 1, ..Default::default() };
             window.dispatch_event(PlatformInput::MouseUp(up), cx);
         }
+        // MDB_DRAG="x1,y1,x2,y2@ms": press at the first point, move to the second over 300 ms, release.
+        if let Ok(d) = std::env::var("MDB_DRAG") {
+            let (xy, at) = d.split_once('@').unwrap_or((&d, "0"));
+            let v: Vec<f32> = xy.split(',').filter_map(|x| x.parse().ok()).collect();
+            let at: f32 = at.parse().unwrap_or(0.0);
+            let step = DRAG_STEP.with(|s| s.get());
+            let (a, b) = (point(px(v[0]), px(v[1])), point(px(v[2]), px(v[3])));
+            if step == 0 && ms >= at {
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent { position: a, pressed_button: None, modifiers: Modifiers::default() }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: a,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                DRAG_STEP.with(|s| s.set(1));
+            } else if step == 1 {
+                let t = ((ms - at) / 300.0).clamp(0.0, 1.0);
+                let p = point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: p,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    }),
+                    cx,
+                );
+                if t >= 1.0 {
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: b,
+                            click_count: 1,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    DRAG_STEP.with(|s| s.set(2));
+                }
+            }
+        }
         while sent < w.count && ms >= sent as f32 * w.gap {
             let e = ScrollEvent {
                 position: w.at,
@@ -1001,7 +1053,9 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
             saved += 1;
         }
         window.refresh();
-        if ms < (w.count as f32 - 1.0) * w.gap + 700.0 { wheel_frames(window, w, sent, saved) } else { cx.quit() }
+        // MDB_WHEEL_HOLD: how long to keep going after the last notch (700 ms by default).
+        let hold = std::env::var("MDB_WHEEL_HOLD").ok().and_then(|h| h.parse().ok()).unwrap_or(700.0);
+        if ms < (w.count as f32 - 1.0) * w.gap + hold { wheel_frames(window, w, sent, saved) } else { cx.quit() }
     });
 }
 
