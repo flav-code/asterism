@@ -3,7 +3,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::*;
 use std::path::Path;
 
-gpui_kit::assets::icon_assets!(pub Icons, [Cpu, MemoryStick]);
+gpui_kit::assets::icon_assets!(pub Icons, [Cpu, MemoryStick, Download]);
 
 /// A line icon in `color`.
 pub fn line(name: IconName, color: Rgba, size: f32) -> Svg {

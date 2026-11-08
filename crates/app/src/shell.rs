@@ -118,6 +118,8 @@ pub struct Shell {
     tab_seg: crate::seg::Seg,
     range_seg: crate::seg::Seg,
     replay: Option<Replay>,
+    /// A newer version: downloading, or ready to install (the arrow at the top right).
+    update: crate::update::State,
     clock_bar: Rc<Cell<Bounds<Pixels>>>,
     _tasks: Vec<Task<()>>,
     _subs: Vec<Subscription>,
@@ -126,7 +128,13 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new(machine: Entity<Machine>, mut feed: GraphFeed, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        machine: Entity<Machine>,
+        mut feed: GraphFeed,
+        mut updates: watch::Receiver<crate::update::State>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let map = cx.new(MapView::new);
         let timeline = cx.new(TimelineView::new);
         let dash = cx.new(DashView::new);
@@ -157,7 +165,7 @@ impl Shell {
                 }
             }),
         ];
-        let updates = cx.spawn(async move |this, cx| {
+        let updates_task = cx.spawn(async move |this, cx| {
             while feed.changed().await.is_ok() {
                 let Some((graph, usage)) = feed.borrow_and_update().clone() else { continue };
                 let alive = this.update(cx, |s, cx| {
@@ -170,6 +178,20 @@ impl Shell {
                     s.push(cx);
                 });
                 if alive.is_err() {
+                    break;
+                }
+            }
+        });
+        let new_version = cx.spawn(async move |this, cx| {
+            while updates.changed().await.is_ok() {
+                let state = updates.borrow_and_update().clone();
+                if this
+                    .update(cx, |s, cx| {
+                        s.update = state;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -216,8 +238,9 @@ impl Shell {
             tab_seg: crate::seg::Seg::default(),
             range_seg: crate::seg::Seg::default(),
             replay: None,
+            update: crate::update::State::Idle,
             clock_bar: Rc::default(),
-            _tasks: vec![updates],
+            _tasks: vec![updates_task, new_version],
             _subs: subs,
             #[cfg(feature = "snapshot")]
             snapshot_taken: false,
@@ -597,6 +620,7 @@ impl Shell {
                         },
                     )))
             })
+            .children(self.update_button(cx))
     }
 
     /// While the history is read after launch: how far it is, in the free room right of the tabs (laid over the bar,
@@ -636,6 +660,60 @@ impl Shell {
                             ),
                         ),
                 ),
+        )
+    }
+
+    /// A newer version, at the top right: a grey arrow with its progress while it downloads, then green; a click
+    /// installs it and starts the app again.
+    fn update_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::update::State;
+        let (ready, label, done) = match &self.update {
+            State::Idle => return None,
+            State::Downloading { version, done } => (false, format!("Downloading v{version}… {:.0}%", done * 100.0), *done),
+            State::Ready { version, .. } => (true, format!("Update ready · v{version}"), 1.0),
+        };
+        let sub = if ready { "Click to restart and update." } else { "It installs when you click the green arrow." };
+        let color = if ready { green() } else { muted() };
+        Some(
+            div()
+                .id("update")
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(32.0))
+                .h(px(30.0))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(if ready { rgba(0x4ade8059) } else { line() })
+                .bg(if ready { rgba(0x4ade801f) } else { panel() })
+                .cursor_pointer()
+                .hover(|s| s.bg(if ready { rgba(0x4ade802e) } else { panel_hi() }))
+                .child(crate::icons::line(gpui_kit::assets::IconName::Download, color, 16.0))
+                .when(!ready, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(7.0))
+                            .right(px(7.0))
+                            .bottom(px(4.0))
+                            .h(px(2.0))
+                            .rounded(px(1.0))
+                            .bg(rgba(0xffffff1f))
+                            .child(div().h_full().rounded(px(1.0)).w(relative(done)).bg(muted())),
+                    )
+                })
+                .tooltip(move |_, cx| cx.new(|_| Tip(label.clone(), sub)).into())
+                .on_click(cx.listener(|s, _, _, cx| {
+                    if let State::Ready { file, .. } = &s.update {
+                        match crate::update::apply(file) {
+                            Ok(()) => cx.quit(),
+                            Err(e) => eprintln!("update: {e}"),
+                        }
+                    }
+                }))
+                .with_animation("update-in", Animation::new(Duration::from_millis(300)).with_easing(ease_in_out), |el, t| el.opacity(t))
+                .into_any_element(),
         )
     }
 
@@ -1173,5 +1251,23 @@ impl Render for Shell {
                 )
             }),
         )
+    }
+}
+
+/// A small hover card: a title and a line under it.
+struct Tip(String, &'static str);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .p(px(10.0))
+            .rounded(px(10.0))
+            .bg(rgba(0x11121ad0))
+            .border_1()
+            .border_color(line())
+            .text_size(px(12.0))
+            .text_color(text())
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(self.0.clone()))
+            .child(div().text_color(muted()).child(self.1))
     }
 }

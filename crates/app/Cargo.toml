@@ -16,6 +16,9 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", optional =
 sysinfo = "0.40.1"
 serde_json = "1.0.154"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# Updates: ask GitHub for the latest release and download it (HTTPS with rustls), check its SHA-256.
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }
+sha2 = "0.10.9"
 
 [features]
 snapshot = ["dep:gpui_platform"]

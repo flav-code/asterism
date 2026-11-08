@@ -8,14 +8,21 @@ cd "$(dirname "$0")/.."
 name=Asterism
 id=io.github.flav-code.asterism
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-arch=$(uname -m)
-
-CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} cargo build --release -p asterism
+# TARGET (optional): aarch64-apple-darwin or x86_64-apple-darwin; by default, this Mac's own.
+if [ -n "${TARGET:-}" ]; then
+  CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} cargo build --release -p asterism --target "$TARGET"
+  bin="target/$TARGET/release/asterism"
+  case "$TARGET" in x86_64*) arch=x64 ;; *) arch=arm64 ;; esac
+else
+  CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} cargo build --release -p asterism
+  bin=target/release/asterism
+  case "$(uname -m)" in x86_64) arch=x64 ;; *) arch=arm64 ;; esac
+fi
 
 app="dist/$name.app"
 rm -rf "$app" dist/dmg
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/asterism "$app/Contents/MacOS/asterism"
+cp "$bin" "$app/Contents/MacOS/asterism"
 cp crates/app/assets/icon.icns "$app/Contents/Resources/icon.icns"
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

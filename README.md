@@ -11,6 +11,15 @@ back under the session that started it, and draws the sessions as a map: who sta
 
 **Status:** early. Works on macOS; Windows builds but is not tested yet.
 
+## Install
+
+Download the latest release (macOS `.dmg` for Apple silicon or Intel, Windows installer) from
+[Releases](https://github.com/flav-code/asterism/releases). The app updates itself: when a newer version is out, a
+green arrow shows at the top right; click it to restart on the new version.
+
+The builds are not signed yet. On macOS, open it the first time with right-click → Open. On Windows, SmartScreen asks
+once: More info → Run anyway.
+
 ## Try it
 
 ```sh
@@ -52,7 +61,8 @@ It shows:
 
 ## Privacy
 
-Everything stays on the machine. It never reads process environments, masks anything in a command line that looks
+Everything stays on the machine. The one request that leaves it: now and then, the installed app asks GitHub for
+the latest Asterism release, to offer an update (`ASTERISM_NO_UPDATES=1` turns that off). It never reads process environments, masks anything in a command line that looks
 like a secret (tokens, keys, passwords, `Authorization` headers, credentials in URLs), shows your home folder as
 `~`, and changes nothing.
 

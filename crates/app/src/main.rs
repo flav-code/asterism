@@ -13,6 +13,7 @@ mod shell;
 mod state;
 mod timeline;
 mod ui;
+mod update;
 mod view;
 
 use asterism_core::desktop::DesktopStore;
@@ -97,7 +98,7 @@ fn main() {
         };
         gpui_kit::open_window(options, cx, |window, cx| {
             let machine = cx.new(|cx| view::Machine::new(rx, window, cx));
-            cx.new(|cx| shell::Shell::new(machine, grx, window, cx))
+            cx.new(|cx| shell::Shell::new(machine, grx, update::start(), window, cx))
         })
         .expect("a window");
         cx.on_window_closed(|cx, _| {
