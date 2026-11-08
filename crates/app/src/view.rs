@@ -1,5 +1,7 @@
-//! What the window draws from the latest report. Colors follow a dark palette with one hue per job:
-//! green = open/idle, amber = working, blue = sessions, red = trouble.
+//! The Machine tab: the machine at the top, who uses it on the left, the agent sessions on the right.
+use crate::glide::Glide;
+use crate::ui::*;
+use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mdb_core::Report;
@@ -7,109 +9,8 @@ use mdb_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionVie
 use mdb_core::host::Pressure;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::watch;
-
-#[cfg(target_os = "macos")]
-const MONO: &str = "Menlo";
-#[cfg(target_os = "windows")]
-const MONO: &str = "Consolas";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const MONO: &str = "DejaVu Sans Mono";
-
-fn bg() -> Rgba {
-    rgb(0x07080d)
-}
-fn panel() -> Rgba {
-    rgb(0x11121a)
-}
-fn panel_hi() -> Rgba {
-    rgb(0x191a23)
-}
-fn line() -> Rgba {
-    rgba(0xffffff12)
-}
-fn text() -> Rgba {
-    rgb(0xe6e7f0)
-}
-fn muted() -> Rgba {
-    rgb(0x8b8c9c)
-}
-fn faint() -> Rgba {
-    rgb(0x84859a)
-}
-fn green() -> Rgba {
-    rgb(0x4ade80)
-}
-fn amber() -> Rgba {
-    rgb(0xfbbf24)
-}
-fn red() -> Rgba {
-    rgb(0xf87171)
-}
-fn blue() -> Rgba {
-    rgb(0x38bdf8)
-}
-fn violet() -> Rgba {
-    rgb(0xa78bfa)
-}
-fn cyan() -> Rgba {
-    rgb(0x22d3ee)
-}
-fn grey() -> Rgba {
-    rgb(0x5b5c6b)
-}
-
-pub fn bytes(b: u64) -> String {
-    let gb = b as f64 / 1e9;
-    match gb {
-        g if g >= 10.0 => format!("{g:.0} GB"),
-        g if g >= 1.0 => format!("{g:.1} GB"),
-        _ => format!("{:.0} MB", b as f64 / 1e6),
-    }
-}
-
-fn cpu(p: f32) -> String {
-    format!("{p:.0}%")
-}
-
-fn rate(per_s: f64) -> String {
-    if per_s < 1e6 { format!("{:.0} KB/s", per_s / 1e3) } else { format!("{:.1} MB/s", per_s / 1e6) }
-}
-
-fn ago(secs: u64) -> String {
-    match secs {
-        s if s < 60 => format!("{s} s"),
-        s if s < 3600 => format!("{} min", s / 60),
-        s if s < 86_400 => format!("{} h", s / 3600),
-        s => format!("{} d", s / 86_400),
-    }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
-/// A thin bar, square-ended: `ratio` of the width in `color`.
-fn bar(ratio: f32, color: Rgba) -> Div {
-    div().h(px(4.)).w_full().bg(line()).child(div().h_full().w(relative(ratio.clamp(0.0, 1.0))).bg(color))
-}
-
-fn caption(s: impl Into<SharedString>) -> Div {
-    div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(faint()).child(s.into())
-}
-
-fn num(s: impl Into<SharedString>) -> Div {
-    div().font_family(MONO).text_size(px(12.)).text_color(text()).child(s.into())
-}
-
-fn dot(color: Rgba) -> Div {
-    div().flex_none().size(px(8.)).rounded_full().bg(color)
-}
-
-fn chip(s: impl Into<SharedString>, color: Rgba) -> Div {
-    div().flex_none().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(panel_hi()).text_size(px(11.)).text_color(color).child(s.into())
-}
 
 /// How long a session's details take to grow or shrink.
 const UNFOLD: Duration = Duration::from_millis(220);
@@ -131,6 +32,8 @@ pub struct Machine {
     /// Clicks per session: each one starts a new animation.
     clicks: HashMap<String, u32>,
     by_cpu: bool,
+    owners_scroll: Glide,
+    sessions_scroll: Glide,
     _updates: Task<()>,
     #[cfg(feature = "snapshot")]
     snapshot_taken: bool,
@@ -156,10 +59,17 @@ impl Machine {
             closing: HashSet::new(),
             clicks: HashMap::new(),
             by_cpu: false,
+            owners_scroll: Glide::default(),
+            sessions_scroll: Glide::default(),
             _updates: updates,
             #[cfg(feature = "snapshot")]
             snapshot_taken: false,
         }
+    }
+
+    #[cfg(feature = "snapshot")]
+    pub fn ready(&self) -> bool {
+        self.report.is_some()
     }
 
     fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -322,6 +232,8 @@ impl Machine {
             .flex_none()
             .h_full()
             .overflow_y_scroll()
+            .track_scroll(&self.owners_scroll.handle)
+            .child(self.owners_scroll.driver())
             .px(px(16.))
             .pb(px(16.))
             .child(div().pb(px(8.)).child(caption("WHO USES IT")))
@@ -488,6 +400,8 @@ impl Machine {
             .min_w_0()
             .h_full()
             .overflow_y_scroll()
+            .track_scroll(&self.sessions_scroll.handle)
+            .child(self.sessions_scroll.driver())
             .pr(px(16.))
             .pb(px(16.))
             .child(caption(format!("SESSIONS · {}", r.sessions.len())))

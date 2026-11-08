@@ -12,6 +12,8 @@ mdb-core = { path = "../core" }
 tokio = { version = "1.54.1", features = ["rt", "time", "sync", "net"] }
 # Only for `--features snapshot`: GPUI renders the window into a PNG itself, no screen-recording permission needed.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", optional = true, features = ["test-support"] }
+sysinfo = "0.40.1"
+serde_json = "1.0.154"
 
 [features]
 snapshot = ["dep:gpui_platform"]
