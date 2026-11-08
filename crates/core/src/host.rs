@@ -55,6 +55,8 @@ pub struct Host {
 
 pub struct HostSampler {
     sys: System,
+    /// Swap counters at the previous sample, to turn them into rates (macOS only so far).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     swap: Option<(Instant, u64, u64)>,
 }
 
@@ -102,6 +104,7 @@ impl HostSampler {
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
         let ncpu = self.sys.cpus().len();
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))] // only macOS refines it below
         let mut memory = Memory {
             total: self.sys.total_memory(),
             used: self.sys.used_memory(),
