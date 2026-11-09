@@ -393,6 +393,10 @@
       "other": "%{n} containers"
     },
     "who_uses_it": "WHO USES IT",
+    "search_apps": "Search apps",
+    "search_sessions": "Search sessions",
+    "no_app_match": "Nothing named “%{query}”",
+    "no_session_match": "No session matches “%{query}”",
     "builds_n": {
       "one": "%{n} build",
       "other": "%{n} builds"

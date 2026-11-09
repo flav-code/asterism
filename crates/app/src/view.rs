@@ -1,6 +1,7 @@
 //! The Machine tab: the machine at the top, who uses it on the left, the agent sessions on the right.
 use crate::glide::Glide;
 use crate::icons;
+use crate::state::norm;
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::Report;
@@ -8,6 +9,7 @@ use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, Sessi
 use asterism_core::host::Pressure;
 use asterism_core::i18n::count;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
@@ -43,13 +45,17 @@ pub struct Machine {
     owners_scroll: Glide,
     sort_seg: crate::seg::Seg,
     sessions_scroll: Glide,
+    /// Each column's search: the apps on the left, the sessions on the right.
+    apps_search: Entity<InputState>,
+    sessions_search: Entity<InputState>,
     _updates: Task<()>,
+    _searches: [Subscription; 2],
     #[cfg(feature = "snapshot")]
     snapshot_taken: bool,
 }
 
 impl Machine {
-    pub fn new(mut rx: watch::Receiver<Option<Arc<Report>>>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(mut rx: watch::Receiver<Option<Arc<Report>>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let updates = cx.spawn(async move |this, cx| {
             while rx.changed().await.is_ok() {
                 let report = rx.borrow_and_update().clone();
@@ -63,6 +69,21 @@ impl Machine {
                 }
             }
         });
+        let apps_search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("view.search_apps").to_string()));
+        let sessions_search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("view.search_sessions").to_string()));
+        // Snapshot builds can start with words in the searches (MDB_APPS_SEARCH, MDB_SESSIONS_SEARCH).
+        #[cfg(feature = "snapshot")]
+        for (input, var) in [(&apps_search, "MDB_APPS_SEARCH"), (&sessions_search, "MDB_SESSIONS_SEARCH")] {
+            if let Ok(v) = std::env::var(var) {
+                input.update(cx, |i, cx| i.set_value(v, window, cx));
+            }
+        }
+        let typed = |_: &mut Self, _: Entity<InputState>, e: &InputEvent, cx: &mut Context<Self>| {
+            if let InputEvent::Change = e {
+                cx.notify();
+            }
+        };
+        let searches = [cx.subscribe(&apps_search, typed), cx.subscribe(&sessions_search, typed)];
         Self {
             report: None,
             prev: None,
@@ -74,7 +95,10 @@ impl Machine {
             owners_scroll: Glide::default(),
             sort_seg: crate::seg::Seg::default(),
             sessions_scroll: Glide::default(),
+            apps_search,
+            sessions_search,
             _updates: updates,
+            _searches: searches,
             #[cfg(feature = "snapshot")]
             snapshot_taken: false,
         }
@@ -83,6 +107,13 @@ impl Machine {
     #[cfg(feature = "snapshot")]
     pub fn ready(&self) -> bool {
         self.report.is_some()
+    }
+
+    /// The searches keep the placeholders they were made with: they get this language's.
+    pub fn relabel(&self, window: &mut Window, cx: &mut App) {
+        for (input, key) in [(&self.apps_search, "view.search_apps"), (&self.sessions_search, "view.search_sessions")] {
+            input.update(cx, |i, cx| i.set_placeholder(t!(key).to_string(), window, cx));
+        }
     }
 
     fn toggle(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -275,32 +306,38 @@ impl Machine {
         row
     }
 
-    fn owners(&self, r: &Report) -> impl IntoElement {
+    fn owners(&self, r: &Report, cx: &App) -> impl IntoElement {
         let mut owners: Vec<&Owner> = r.owners.iter().collect();
         if self.by_cpu {
             owners.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
         }
         let top = |o: &Owner| if self.by_cpu { o.cpu } else { o.mem as f32 };
+        // The bars keep the scale of the whole list while it is searched.
         let max = owners.first().map_or(1.0, |o| top(o).max(1.0));
+        // "System" stays English in the data (it keys the trend and the id): only its label is translated.
+        let label = |o: &Owner| if o.kind == OwnerKind::System { t!("core.system").into_owned() } else { o.name.clone() };
+        let typed = self.apps_search.read(cx).value();
+        let q = norm(typed.trim());
+        owners.retain(|o| norm(&label(o)).contains(&q));
         let kind_color = |k: OwnerKind| match k {
             OwnerKind::Session => blue(),
             OwnerKind::Docker => cyan(),
             OwnerKind::App => violet(),
             OwnerKind::System | OwnerKind::Other => grey(),
         };
-        div()
+        let none = owners.is_empty().then(|| no_match(t!("view.no_app_match", query = typed.trim()).into_owned()));
+        let list = div()
             .id("owners")
             .flex()
             .flex_col()
             .gap(px(2.))
-            .w(px(380.))
-            .flex_none()
-            .h_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.owners_scroll.handle)
             .px(px(16.))
             .pb(px(16.))
-            .child(div().pb(px(8.)).child(caption(t!("view.who_uses_it").into_owned())))
+            .children(none)
             .children(owners.into_iter().take(30).map(|o| {
                 let before = self.prev.as_ref().and_then(|p| p.owners.iter().find(|x| x.kind == o.kind && x.name == o.name));
                 let icon = o.bundle.as_ref().and_then(|b| self.icons.get(b).cloned().flatten());
@@ -321,16 +358,7 @@ impl Machine {
                                     div().w(px(16.)).flex_none().flex().justify_center().child(dot(kind_color(o.kind))).into_any_element()
                                 }
                             })
-                            // "System" stays English in the data (it keys the trend and the id): only its label is translated.
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .text_color(text())
-                                    .child(if o.kind == OwnerKind::System { t!("core.system").into_owned() } else { o.name.clone() }),
-                            )
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(text()).child(label(o)))
                             .child(
                                 metric(IconName::MemoryStick, bytes(o.mem), mem_trend(o.mem, before.map(|b| b.mem)), &key, r.at).w(px(92.)),
                             )
@@ -338,7 +366,15 @@ impl Machine {
                     )
                     .child(bar(top(o) / max, kind_color(o.kind)))
             }))
-            .child(self.owners_scroll.driver())
+            .child(self.owners_scroll.driver());
+        div()
+            .flex()
+            .flex_col()
+            .w(px(380.))
+            .flex_none()
+            .h_full()
+            .child(column_head(caption(t!("view.who_uses_it").into_owned()), &self.apps_search, 170.).px(px(16.)))
+            .child(list)
     }
 
     fn session(&self, s: &SessionView, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -501,32 +537,37 @@ impl Machine {
     }
 
     fn sessions(&self, r: &Report, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut sessions: Vec<&SessionView> = r.sessions.iter().collect();
+        let typed = self.sessions_search.read(cx).value();
+        let q = norm(typed.trim());
+        let mut sessions: Vec<&SessionView> = r.sessions.iter().filter(|s| session_matches(s, &q)).collect();
         if self.by_cpu {
             sessions.sort_by(|a, b| (b.cpu + b.docker_cpu).total_cmp(&(a.cpu + a.docker_cpu)));
         }
-        div()
+        let unattached: Vec<&GroupView> = r.unattached.iter().filter(|g| group_matches(g, &q)).collect();
+        let none = (sessions.is_empty() && unattached.is_empty() && !q.is_empty())
+            .then(|| no_match(t!("view.no_session_match", query = typed.trim()).into_owned()));
+        let head = column_head(caption(t!("view.sessions_caption", n = sessions.len()).into_owned()), &self.sessions_search, 220.);
+        let list = div()
             .id("sessions")
             .flex()
             .flex_col()
             .gap(px(8.))
             .flex_1()
-            .min_w_0()
-            .h_full()
+            .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.sessions_scroll.handle)
-            .pr(px(16.))
             .pb(px(16.))
-            .child(caption(t!("view.sessions_caption", n = r.sessions.len()).into_owned()))
+            .children(none)
             .children(sessions.into_iter().map(|s| self.session(s, cx)))
-            .when(!r.unattached.is_empty(), |d| {
+            .when(!unattached.is_empty(), |d| {
                 d.child(div().pt(px(12.)).child(caption(t!("view.unattached").into_owned()))).children(
-                    r.unattached
-                        .iter()
+                    unattached
+                        .into_iter()
                         .map(|g| div().p(px(12.)).rounded(px(10.)).bg(panel()).border_1().border_color(line()).child(group(g))),
                 )
             })
-            .child(self.sessions_scroll.driver())
+            .child(self.sessions_scroll.driver());
+        div().flex().flex_col().flex_1().min_w_0().h_full().pr(px(16.)).child(head).child(list)
     }
 }
 
@@ -586,6 +627,34 @@ fn frames(window: &mut Window, dir: String, start: std::time::Instant, next: usi
         }
         if next < MARKS.len() { frames(window, dir, start, next) } else { cx.quit() }
     });
+}
+
+/// A column's title with its search at the right end; the list under it scrolls, this stays.
+fn column_head(title: Div, search: &Entity<InputState>, width: f32) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .pb(px(8.))
+        .child(div().flex_1().min_w_0().child(title))
+        .child(div().w(px(width)).flex_none().child(Input::new(search)))
+}
+
+/// What a search with no answer says, where the list would be.
+fn no_match(said: String) -> Div {
+    div().py(px(12.)).text_size(px(12.)).text_color(muted()).child(said)
+}
+
+/// Whether a session shows this text (already through `norm`): in its title, its project or its containers' line.
+fn session_matches(s: &SessionView, q: &str) -> bool {
+    let has = |t: &str| norm(t).contains(q);
+    has(&s.title) || has(&s.project) || s.groups.iter().any(|g| has(&g.name) || has(&g.kind))
+}
+
+/// Whether a group of containers no session owns shows this text: its name or one of its containers'.
+fn group_matches(g: &GroupView, q: &str) -> bool {
+    let has = |t: &str| norm(t).contains(q);
+    has(&g.name) || has(&g.kind) || g.containers.iter().any(|c| has(&c.name))
 }
 
 /// About how tall a session's details are, so the unfolding animation grows at the right pace.
@@ -663,7 +732,7 @@ impl Render for Machine {
         self.load_icons(&r, cx);
         root.child(self.header(&r, window, cx))
             .child(self.machine(&r))
-            .child(div().flex().flex_1().min_h_0().child(self.owners(&r)).child(self.sessions(&r, cx)))
+            .child(div().flex().flex_1().min_h_0().child(self.owners(&r, cx)).child(self.sessions(&r, cx)))
     }
 }
 

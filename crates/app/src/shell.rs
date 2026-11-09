@@ -1086,6 +1086,7 @@ impl Shell {
         {
             input.update(cx, |i, cx| i.set_placeholder(t!(key).to_string(), window, cx));
         }
+        self.machine.update(cx, |m, cx| m.relabel(window, cx));
     }
 
     /// Checks for a newer version now; the answer shows under the button.
