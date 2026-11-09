@@ -115,7 +115,7 @@ jobs:
           mkdir -p dist home/.claude/projects
           out=dist/asterism-agent-$v-linux-${{ matrix.arch }}
           cp target/${{ matrix.target }}/release/asterism-cli "$out"
-          file "$out" | grep -q 'statically linked'
+          file "$out" | grep -Eq 'statically linked|static-pie linked'  # no system library needed
           first=$( (sleep 3) | HOME=$PWD/home "$out" serve | head -1)
           echo "$first"
           [ "$first" = "{\"asterism\":\"$v\"}" ]

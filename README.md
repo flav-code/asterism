@@ -60,6 +60,9 @@ server button at the top right: a name, and what you type after `ssh` to reach i
   `~/.claude` and sends back only the result; it stops when the connection does. Nothing else changes there.
 - Its open sessions get the machine's name (in the panel, the list of open sessions and the map's tooltips), and
   its token usage counts in the Usage tab. The Machine tab still shows this computer only.
+- Every session says where it runs, with an icon: a laptop for this computer, a server for another machine (added
+  here, or one the Claude desktop app reaches over SSH: same session, shown once), a cloud for a session only known by
+  a message from elsewhere.
 
 ## Try it
 

@@ -222,13 +222,18 @@
       "working": "working",
       "idle": "open, idle",
       "closed": "closed",
-      "remote": "other machine",
+      "remote": "cloud, elsewhere",
+      "machine": "SSH machine",
       "started": "started",
       "forked": "forked",
       "message": "message",
       "report": "report back",
       "subagent": "subagent"
     }
+  },
+  "origin": {
+    "here": "This computer",
+    "elsewhere": "Cloud or another computer"
   },
   "panel": {
     "overview": {
@@ -272,7 +277,6 @@
       "last_active": "Last active",
       "turns": "Turns",
       "tokens": "Tokens",
-      "machine": "Machine",
       "process": "Process",
       "parent": "Parent",
       "pull_requests": "Pull requests"

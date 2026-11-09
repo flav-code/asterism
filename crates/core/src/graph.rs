@@ -421,6 +421,7 @@ impl Visualizer {
             let mut n = node(&d.id, NodeKind::Desktop, if d.title.is_empty() { &untitled } else { &d.title }, "");
             n.project = project_of(d.origin_cwd.as_deref().or(d.cwd.as_deref()).unwrap_or("?"));
             (n.cwd, n.created_at, n.last_at, n.archived) = (d.cwd.clone(), d.created_at, d.last_activity_at, d.archived);
+            n.machine = d.ssh.clone().unwrap_or_default();
             (n.model, n.profile, n.branch, n.turns, n.scheduled) =
                 (d.model.clone(), Some(d.profile.clone()), d.branch.clone(), d.turns, d.scheduled);
             n.prs = d.prs.iter().map(|p| PrView { n: p.n, url: p.url.clone(), state: p.state.clone(), repo: p.repo.clone() }).collect();
@@ -458,7 +459,9 @@ impl Visualizer {
         }
 
         for r in registry(home) {
-            let id = r.host.clone().filter(|h| nodes.contains_key(h)).unwrap_or_else(|| format!("cli:{}", r.session));
+            // Started by a desktop app: its session's id. Where that app doesn't run (a server it reaches over SSH),
+            // the same id still names it, so the computer that shows both maps sees one session.
+            let id = r.host.clone().filter(|h| nodes.contains_key(h) || desktop.is_empty()).unwrap_or_else(|| format!("cli:{}", r.session));
             let n = nodes.entry(id.clone()).or_insert_with(|| {
                 order.push(id.clone());
                 let mut n = node(
@@ -648,6 +651,14 @@ impl Visualizer {
         self.full_scan_step(now_ms, &mut budget);
         self.cli_to_node = cli_to_node;
         self.titles = nodes.values().map(|n| (n.id.clone(), (n.title.clone(), n.project.clone(), n.kind))).collect();
+        // A subagent runs where its session does.
+        let machine_of: HashMap<String, String> =
+            nodes.values().filter(|n| !n.machine.is_empty()).map(|n| (n.id.clone(), n.machine.clone())).collect();
+        for n in nodes.values_mut().filter(|n| n.machine.is_empty()) {
+            if let Some(m) = n.parent.as_ref().and_then(|p| machine_of.get(p)) {
+                n.machine = m.clone();
+            }
+        }
         let nodes = order.into_iter().filter_map(|id| nodes.remove(&id)).collect();
         Graph { at: now_ms, nodes, edges, messages: resolved }
     }
@@ -869,5 +880,22 @@ mod tests {
         assert_eq!(u.minutes.iter().map(|(m, t)| (*m, t.o)).collect::<Vec<_>>(), [(60_000, 5), (120_000, 2)]);
         assert_eq!(u.tools, [("Read".to_string(), 7), ("Bash".to_string(), 3)]);
         assert_eq!(u.first, 20);
+    }
+
+    /// On a server the desktop app reaches over SSH, a session it started keeps the desktop session's id.
+    #[test]
+    fn a_desktop_session_on_a_server_keeps_its_id() {
+        let home = std::env::temp_dir().join(format!("asterism-graph-test-{}", std::process::id()));
+        fs::create_dir_all(home.join(".claude/sessions")).unwrap();
+        let entry = |pid: u32, host: Option<&str>| {
+            serde_json::json!({ "pid": pid, "sessionId": format!("s{pid}"), "cwd": "/srv/app", "hostSessionId": host }).to_string()
+        };
+        fs::write(home.join(".claude/sessions/7.json"), entry(7, Some("local_abc"))).unwrap();
+        fs::write(home.join(".claude/sessions/8.json"), entry(8, None)).unwrap();
+        let g = Visualizer::default().build(&home, &[], &HashSet::from([7, 8]), 1_800_000_000_000);
+        let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["cli:s8", "local_abc"]);
+        fs::remove_dir_all(&home).ok();
     }
 }

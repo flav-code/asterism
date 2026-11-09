@@ -7,6 +7,7 @@ use crate::state::{Filters, is_session, node_tip, project_colors, tool_name, vis
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
+use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
@@ -501,6 +502,8 @@ struct Scene {
     labels: Vec<(Point<Pixels>, SharedString, f32, Rgba, bool, FontWeight)>,
     comets: Vec<(Point<Pixels>, Rgba)>,
     ripples: Vec<(Point<Pixels>, f32, Rgba)>,
+    /// Sessions not on this computer: a small disc with where they run (center, radius, icon, opacity).
+    badges: Vec<(Point<Pixels>, f32, IconName, f32)>,
 }
 
 fn quad_point(a: Point<Pixels>, c: Point<Pixels>, b: Point<Pixels>, t: f32) -> Point<Pixels> {
@@ -558,6 +561,14 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
         let b = Bounds::new(point(c.x - px(*r), c.y - px(*r)), size(px(r * 2.0), px(r * 2.0)));
         let style = if *dashed { BorderStyle::Dashed } else { BorderStyle::Solid };
         window.paint_quad(quad(b, px(*r), *fill, px(*width), *stroke, style));
+    }
+    for (c, r, icon, op) in &scene.badges {
+        let c = o + *c;
+        let b = Bounds::new(point(c.x - px(*r), c.y - px(*r)), size(px(r * 2.0), px(r * 2.0)));
+        window.paint_quad(quad(b, px(*r), alpha(rgb(0x1b1d2a), *op), px(1.0), alpha(rgb(0xb8b9c6), *op), BorderStyle::Solid));
+        let s = r * 1.25;
+        let ib = Bounds::new(point(c.x - px(s / 2.0), c.y - px(s / 2.0)), size(px(s), px(s)));
+        window.paint_svg(ib, icon.path(), None, TransformationMatrix::unit(), alpha(rgb(0xe4e5ee), *op).into(), cx).ok();
     }
     for (c, r, color) in &scene.ripples {
         let c = o + *c;
@@ -641,7 +652,8 @@ impl Render for MapView {
         let far = k < 0.55 && self.node_of.len() > 150;
         let now = now_ms();
         let t = Instant::now();
-        let mut scene = Scene { lines: vec![], arrows: vec![], circles: vec![], labels: vec![], comets: vec![], ripples: vec![] };
+        let mut scene =
+            Scene { lines: vec![], arrows: vec![], circles: vec![], labels: vec![], comets: vec![], ripples: vec![], badges: vec![] };
 
         let focus_link = |a: usize, b: usize| focus.is_some_and(|f| f == a || f == b);
         // Hovering dims the rest of the map and shows titles: both fade instead of switching.
@@ -730,6 +742,15 @@ impl Render for MapView {
                 let dr = (r * 0.3).max(3.0);
                 let dc = point(c.x + px(r * 0.72), c.y - px(r * 0.72));
                 scene.circles.push((dc, dr, alpha(if working(n) { amber() } else { green() }, op), alpha(bg(), op), 2.5, false));
+            }
+            if !agent
+                && let (o, Some(icon)) = (crate::state::origin(n), crate::state::origin(n).icon())
+                && o != crate::state::Origin::Here
+            {
+                // On the lower right edge, mostly outside: small bubbles stay visible.
+                let br = (r * 0.36).max(5.0);
+                let d = r * 0.71 + br * 0.45;
+                scene.badges.push((point(c.x + px(d), c.y + px(d)), br, icon, op));
             }
         }
 
@@ -1021,6 +1042,18 @@ fn legend() -> Div {
     let item = |swatch: Div, label: std::borrow::Cow<str>| div().flex().items_center().gap(px(7.0)).child(swatch).child(label.into_owned());
     let ring = |c: Rgba, dashed: bool| div().size(px(10.0)).rounded_full().border_1().border_color(c).when(dashed, |d| d.border_dashed());
     let bar = |c: Rgba| div().w(px(14.0)).h(px(2.0)).bg(c);
+    let badge = |icon: IconName| {
+        div()
+            .size(px(14.0))
+            .rounded_full()
+            .border_1()
+            .border_color(rgb(0xb8b9c6))
+            .bg(rgb(0x1b1d2a))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(crate::icons::line(icon, rgb(0xe4e5ee), 9.0))
+    };
     div()
         .absolute()
         .right(px(16.0))
@@ -1039,7 +1072,8 @@ fn legend() -> Div {
         .child(item(dot(amber()), t!("map.legend.working")))
         .child(item(dot(green()), t!("map.legend.idle")))
         .child(item(ring(rgb(0x7c9cff), true), t!("map.legend.closed")))
-        .child(item(ring(rgb(0xb8b9c6), true), t!("map.legend.remote")))
+        .child(item(badge(IconName::Server), t!("map.legend.machine")))
+        .child(item(badge(IconName::Cloud), t!("map.legend.remote")))
         .child(item(bar(rgb(0xa78bfa)), t!("map.legend.started")))
         .child(item(bar(rgb(0xf472b6)), t!("map.legend.forked")))
         .child(item(bar(blue()), t!("map.legend.message")))

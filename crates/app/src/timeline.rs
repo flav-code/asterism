@@ -681,7 +681,7 @@ impl Render for TimelineView {
                     let a = if n.live { 1.0 } else { 0.6 };
                     let db = Bounds::new(at(dx - 3.5, cy(r) - 3.5), size(px(7.0), px(7.0)));
                     window.paint_quad(quad(db, px(3.5), alpha(dot_color, a), px(1.0), alpha(ring, a), BorderStyle::Solid));
-                    let room = ((LEFT - 34.0 - depth as f32 * 14.0) / 6.6) as usize;
+                    let mut room = ((LEFT - 34.0 - depth as f32 * 14.0) / 6.6) as usize;
                     let mut tx = dx + 10.0;
                     if depth > 0 {
                         // "↳", drawn: fonts draw it at very different sizes.
@@ -695,6 +695,13 @@ impl Render for TimelineView {
                         }
                         arrow(window, at(ax + 9.0, ay + 0.5), at(ax, ay + 0.5), muted());
                         tx += 14.0;
+                    }
+                    // Not on this computer: where it runs, before its title.
+                    let place = crate::state::origin(n);
+                    if let Some(icon) = place.icon().filter(|_| place != crate::state::Origin::Here) {
+                        let ib = Bounds::new(at(tx, cy(r) - 5.0), size(px(10.0), px(10.0)));
+                        window.paint_svg(ib, icon.path(), None, TransformationMatrix::unit(), muted().into(), cx).ok();
+                        (tx, room) = (tx + 14.0, room.saturating_sub(2));
                     }
                     let title = clip(&n.title, room);
                     let (c, weight) = if n.live {

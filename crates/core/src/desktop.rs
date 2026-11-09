@@ -53,6 +53,8 @@ pub struct DesktopSession {
     pub written: Vec<String>,
     pub folder_worktrees: Vec<String>,
     pub shell_folders: Vec<String>,
+    /// The machine it runs on when the app reaches it over SSH: the name it was given, else its host (without the user).
+    pub ssh: Option<String>,
 }
 
 fn s(v: &Value, k: &str) -> Option<String> {
@@ -123,6 +125,9 @@ pub fn parse(v: &Value, profile: &str) -> Option<DesktopSession> {
             .filter_map(|w| s(w, "worktreePath"))
             .collect(),
         shell_folders: strings(v, "shellFolders"),
+        ssh: v
+            .get("sshConfig")
+            .and_then(|c| s(c, "name").or_else(|| s(c, "sshHost").map(|h| h.rsplit('@').next().unwrap_or(&h).to_string()))),
     })
 }
 
@@ -187,5 +192,19 @@ impl DesktopStore {
         }
         self.files.retain(|f, _| seen.contains(f));
         self.files.values().filter_map(|(_, _, d)| d.clone()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_the_ssh_machine() {
+        let ssh = |c: Value| parse(&serde_json::json!({ "sessionId": "local_x", "sshConfig": c }), "Claude").and_then(|d| d.ssh);
+        assert_eq!(ssh(serde_json::json!({ "sshHost": "me@10.0.0.2" })).as_deref(), Some("10.0.0.2"));
+        assert_eq!(ssh(serde_json::json!({ "sshHost": "box" })).as_deref(), Some("box"));
+        assert_eq!(ssh(serde_json::json!({ "sshHost": "me@10.0.0.2", "name": "build box" })).as_deref(), Some("build box"));
+        assert_eq!(ssh(Value::Null), None);
     }
 }

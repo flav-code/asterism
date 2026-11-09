@@ -199,11 +199,15 @@ impl Panel {
                         .child(div().min_w_0().child(clip(&m.detail, 90))),
                     None => div().child(n.project.clone()),
                 };
-                // On another machine: its name before the time.
-                let mut right = ago(now.saturating_sub(when) / 1000);
-                if !n.machine.is_empty() {
-                    right = format!("{} · {right}", clip(&n.machine, 14));
-                }
+                // Where it runs: an icon, and the machine's name when it is not this computer.
+                let o = crate::state::origin(n);
+                let right = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .children(o.icon().map(|icon| crate::icons::line(icon, faint(), 11.0)))
+                    .when(o == crate::state::Origin::Machine, |d| d.child(clip(&n.machine, 14)))
+                    .child(ago(now.saturating_sub(when) / 1000));
                 item(&n.id, self.dot(n, 10.0), n.title.clone(), right, Some(sum.into_any_element()), cx)
             })
             .collect::<Vec<_>>();
@@ -293,9 +297,6 @@ impl Panel {
             let value = t!("panel.tokens_value", total = total, output = output, cost = cost).to_string();
             kv.push((t!("panel.field.tokens").to_string(), text_el(value)));
         }
-        if !n.machine.is_empty() {
-            kv.push((t!("panel.field.machine").to_string(), text_el(n.machine.clone())));
-        }
         if let Some(pid) = n.pid {
             kv.push((t!("panel.field.process").to_string(), text_el(format!("pid {pid}"))));
         }
@@ -383,6 +384,22 @@ impl Panel {
                     .flex_wrap()
                     .gap(px(6.0))
                     .mt(px(10.0))
+                    // Where it runs comes first, with its icon.
+                    .children(crate::state::origin(n).icon().map(|icon| {
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .px(px(6.))
+                            .py(px(1.))
+                            .rounded(px(4.))
+                            .bg(panel_hi())
+                            .text_size(px(11.))
+                            .text_color(muted())
+                            .child(crate::icons::line(icon, muted(), 11.0))
+                            .child(crate::state::origin_label(n))
+                    }))
                     .children(chips.into_iter().flatten().map(|c| chip(c, muted()).bg(panel_hi()))),
             )
             .child(div().flex().flex_col().gap(px(6.0)).mt(px(12.0)).text_size(px(12.0)).children(kv.into_iter().map(|(k, v)| {
@@ -555,7 +572,7 @@ fn text_el(s: String) -> AnyElement {
 }
 
 /// A clickable row: a mark, a title, a time on the right and an optional line under it. A click selects `id`.
-fn item(id: &str, mark: Div, title: String, time: String, sum: Option<AnyElement>, cx: &mut Context<Panel>) -> AnyElement {
+fn item(id: &str, mark: Div, title: String, time: impl IntoElement, sum: Option<AnyElement>, cx: &mut Context<Panel>) -> AnyElement {
     let go = id.to_string();
     div()
         .id(SharedString::from(format!("item-{id}")))

@@ -35,6 +35,50 @@ impl Default for Filters {
     }
 }
 
+/// Where a session runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Origin {
+    /// This computer.
+    Here,
+    /// Another machine reached over SSH, by Asterism or the desktop app: `Node::machine` names it.
+    Machine,
+    /// Known only by a message from elsewhere: the cloud, or another computer.
+    Elsewhere,
+    /// Only named by a message, nowhere else: it could be anywhere.
+    Unknown,
+}
+
+pub fn origin(n: &Node) -> Origin {
+    match n.kind {
+        NodeKind::Remote => Origin::Elsewhere,
+        NodeKind::Ghost => Origin::Unknown,
+        _ if !n.machine.is_empty() => Origin::Machine,
+        _ => Origin::Here,
+    }
+}
+
+impl Origin {
+    pub fn icon(self) -> Option<gpui_kit::assets::IconName> {
+        use gpui_kit::assets::IconName;
+        match self {
+            Origin::Here => Some(IconName::Laptop),
+            Origin::Machine => Some(IconName::Server),
+            Origin::Elsewhere => Some(IconName::Cloud),
+            Origin::Unknown => None,
+        }
+    }
+}
+
+/// Where `n` runs, in words: this computer, the machine's name, or elsewhere.
+pub fn origin_label(n: &Node) -> String {
+    match origin(n) {
+        Origin::Here => t!("origin.here").into_owned(),
+        Origin::Machine => n.machine.clone(),
+        Origin::Elsewhere => t!("origin.elsewhere").into_owned(),
+        Origin::Unknown => String::new(),
+    }
+}
+
 pub fn is_session(n: &Node) -> bool {
     matches!(n.kind, NodeKind::Desktop | NodeKind::Cli)
 }
