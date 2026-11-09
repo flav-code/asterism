@@ -3,6 +3,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../locales");
     println!("cargo:rerun-if-changed=asterism.rc");
     println!("cargo:rerun-if-changed=assets/icon.ico");
+    println!("cargo:rerun-if-changed=asterism.exe.manifest");
     #[cfg(windows)]
     embed_resource::compile("asterism.rc", embed_resource::NONE).manifest_optional().unwrap();
 }

@@ -60,7 +60,7 @@ jobs:
       - name: Asterism starts
         shell: pwsh
         run: |
-          $p = Start-Process target\release\asterism.exe -PassThru
+          $p = Start-Process target\release\asterism.exe -PassThru -RedirectStandardError "$PWD\asterism-err.txt"
           Start-Sleep 20
           # The window's own menu (its icon in the title bar) has the app's items, and the taskbar icon's menu
           # (a second asterism.exe --dock-action 0) hands its command to the open window, which says this copy
@@ -71,6 +71,26 @@ jobs:
             [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
             [DllImport("user32.dll")] public static extern IntPtr GetSystemMenu(IntPtr h, bool revert);
             [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuStringW(IntPtr m, uint id, StringBuilder s, int n, uint flags);
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            // The visible windows of a process, as "class | title" lines.
+            public static string List(uint pid) {
+              var all = new StringBuilder();
+              EnumWindows((h, l) => {
+                uint p; GetWindowThreadProcessId(h, out p);
+                if (p == pid && IsWindowVisible(h)) {
+                  var c = new StringBuilder(256); var t = new StringBuilder(256);
+                  GetClassNameW(h, c, 256); GetWindowTextW(h, t, 256);
+                  all.AppendLine(c + " | " + t);
+                }
+                return true;
+              }, IntPtr.Zero);
+              return all.ToString();
+            }
           }
           '@
           $h = [W]::FindWindowW("Zed::Window", "Asterism")
@@ -84,8 +104,12 @@ jobs:
           }
           $second = Start-Process target\release\asterism.exe -ArgumentList "--dock-action", "0" -PassThru
           if (-not $second.WaitForExit(15000)) { throw "the second asterism.exe kept running instead of handing over" }
+          "second asterism.exe exited with $($second.ExitCode)"
           Start-Sleep 4
-          if ([W]::FindWindowW("#32770", $null) -eq [IntPtr]::Zero) { throw "no dialog after Check for updates" }
+          $windows = [W]::List([uint32]$p.Id)
+          "Asterism's windows:"; $windows
+          if ($p.HasExited) { Get-Content asterism-err.txt -ErrorAction SilentlyContinue; throw "Asterism quit with code $($p.ExitCode)" }
+          if ($windows -notmatch '#32770') { Get-Content asterism-err.txt -ErrorAction SilentlyContinue; throw "no dialog after Check for updates" }
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height
