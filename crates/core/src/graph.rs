@@ -491,6 +491,27 @@ impl Visualizer {
             }
         }
 
+        // Terminal sessions that nothing else names: closed ones, which leave the registry (on a server, nearly all of
+        // them). Their transcript says enough. The desktop app's own are left out: it lists those it still has.
+        for (id, path) in &self.index {
+            let Some(st) = self.transcripts.files.get(path) else { continue }; // not read yet
+            let nid = format!("cli:{id}");
+            if cli_to_node.contains_key(id)
+                || nodes.contains_key(&nid)
+                || st.last.is_none()
+                || st.entrypoint.as_deref() == Some("claude-desktop")
+            {
+                continue;
+            }
+            let title = st.title.clone().or_else(|| st.prompt.clone()).unwrap_or_else(|| cli_title.to_string());
+            let mut n = node(&nid, NodeKind::Cli, &title, &project_of(st.cwd.as_deref().unwrap_or("?")));
+            (n.cwd, n.created_at, n.last_at) = (st.cwd.clone(), st.started, st.modified.max(st.started));
+            order.push(nid.clone());
+            nodes.insert(nid.clone(), n);
+            cli.insert(nid.clone(), vec![id.clone()]);
+            cli_to_node.insert(id.clone(), nid);
+        }
+
         // Titles name sessions in messages; on a clash the live, most recent one wins (it is set last).
         let mut by_title: HashMap<String, String> = HashMap::new();
         let mut ranked: Vec<&Node> = nodes.values().collect();
@@ -896,6 +917,33 @@ mod tests {
         let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, ["cli:s8", "local_abc"]);
+        fs::remove_dir_all(&home).ok();
+    }
+
+    /// A closed terminal session is on the map from its transcript; an empty one and the desktop app's are not.
+    #[test]
+    fn closed_terminal_sessions_come_from_their_transcript() {
+        let home = std::env::temp_dir().join(format!("asterism-cli-test-{}", std::process::id()));
+        let dir = home.join(".claude/projects/-srv-api");
+        fs::create_dir_all(&dir).unwrap();
+        let user = |entry: &str, text: &str| {
+            serde_json::json!({ "type": "user", "cwd": "/srv/api", "entrypoint": entry, "timestamp": "2026-11-08T10:00:00Z",
+                "message": { "role": "user", "content": text } })
+            .to_string()
+        };
+        let reply = r#"{"type":"assistant","timestamp":"2026-11-08T10:01:00Z","message":{"content":[{"type":"text","text":"Done"}]}}"#;
+        let caveat = user("cli", "<local-command-caveat>output</local-command-caveat>");
+        fs::write(dir.join("aaa.jsonl"), [caveat, user("cli", "Fix the **login** page\nand more"), reply.into()].join("\n") + "\n")
+            .unwrap();
+        fs::write(dir.join("bbb.jsonl"), "{\"type\":\"system\"}\n").unwrap();
+        fs::write(dir.join("ccc.jsonl"), [user("claude-desktop", "Deleted session"), reply.into()].join("\n") + "\n").unwrap();
+        let mut viz = Visualizer::default();
+        viz.build(&home, &[], &HashSet::new(), 1_800_000_000_000); // the first build reads the files
+        let g = viz.build(&home, &[], &HashSet::new(), 1_800_000_000_000);
+        let found: Vec<(&str, &str, &str, bool)> =
+            g.nodes.iter().map(|n| (n.id.as_str(), n.title.as_str(), n.project.as_str(), n.live)).collect();
+        assert_eq!(found, [("cli:aaa", "Fix the login page", "api", false)]);
+        assert!(g.nodes[0].created_at > 0);
         fs::remove_dir_all(&home).ok();
     }
 }

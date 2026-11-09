@@ -41,6 +41,12 @@ pub struct Transcript {
     pub tokens: FileTotals,
     /// A subagent's transcript.
     pub agent: bool,
+    /// From its first prompt: the folder, what started it ("cli", "claude-desktop"…), when, and that prompt's first
+    /// line (a terminal session's title when it has none).
+    pub cwd: Option<String>,
+    pub entrypoint: Option<String>,
+    pub started: u64,
+    pub prompt: Option<String>,
     /// Last change, in ms since the epoch.
     pub modified: u64,
     /// The file's size when last looked at.
@@ -77,6 +83,24 @@ fn content(j: &Value) -> impl Iterator<Item = &Value> {
 }
 
 fn handle(st: &mut Transcript, line: &str, usage: &mut Usage, now_ms: u64) {
+    if st.prompt.is_none()
+        && line.contains("\"type\":\"user\"")
+        && let Ok(j) = serde_json::from_str::<Value>(line)
+        && j.get("type").and_then(Value::as_str) == Some("user")
+    {
+        let s = |k: &str| j.get(k).and_then(Value::as_str).map(str::to_string);
+        (st.cwd, st.entrypoint) = (st.cwd.take().or_else(|| s("cwd")), st.entrypoint.take().or_else(|| s("entrypoint")));
+        if st.started == 0 {
+            st.started = s("timestamp").as_deref().and_then(crate::sessions::iso_ms).unwrap_or(0);
+        }
+        let text = match j.pointer("/message/content") {
+            Some(Value::String(t)) => Some(t.as_str()),
+            Some(Value::Array(blocks)) => blocks.iter().find_map(|b| b.get("text").and_then(Value::as_str)),
+            _ => None,
+        };
+        // Tags are the app's own lines (a command's output, a scheduled task), not what someone asked.
+        st.prompt = text.filter(|t| !t.trim().is_empty() && !t.trim_start().starts_with('<')).map(plain);
+    }
     if line.contains("\"type\":\"custom-title\"") {
         if let Ok(j) = serde_json::from_str::<Value>(line)
             && j.get("type").and_then(Value::as_str) == Some("custom-title")

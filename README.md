@@ -60,7 +60,7 @@ server button at the top right: a name, and what you type after `ssh` to reach i
 - The first time, and after each update, it copies a small agent to `~/.cache/asterism` there (`asterism-cli serve`,
   Linux x64 or arm64, from this version's release, checked against its SHA-256). The agent reads that machine's
   `~/.claude` and sends back only the result; it stops when the connection does. Nothing else changes there.
-- Its open sessions get the machine's name (in the panel, the list of open sessions and the map's tooltips), and
+- Its sessions, open or closed, get the machine's name (in the panel, the list of open sessions and the map's tooltips), and
   its token usage counts in the Usage tab. The Machine tab still shows this computer only.
 - Every session says where it runs, with an icon: a laptop for this computer, a server for another machine (added
   here, or one the Claude desktop app reaches over SSH: same session, shown once), a cloud for a session only known by
@@ -95,7 +95,7 @@ It shows:
 ## How it finds things
 
 - **Sessions** come from the files Claude Code keeps: the live-session registry (`~/.claude/sessions`), the desktop
-  app's session files, and the end of each transcript. These formats are internal and undocumented: they are only
+  app's session files, and each transcript (a closed terminal session is only there: its first prompt titles it). These formats are internal and undocumented: they are only
   read, unknown fields are ignored and missing files are fine.
 - **Processes** are matched to a session by the registry's process id, else by `--resume <id>`, else by folder and
   start time. Everything under a session's process counts for it; a process that detached from it (its parent is

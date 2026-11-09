@@ -145,6 +145,7 @@ pub struct Shell {
     feed_w: f32,
     feed_last: Instant,
     project_menu: bool,
+    range_menu: bool,
     language_menu: bool,
     machines_menu: bool,
     /// The machines menu's form, and the machine whose removal waits for a yes.
@@ -157,7 +158,6 @@ pub struct Shell {
     menu_opens: u32,
     menu_scroll: crate::glide::Glide,
     tab_seg: crate::seg::Seg,
-    range_seg: crate::seg::Seg,
     replay: Option<Replay>,
     /// A newer version: downloading, or ready to install (the arrow at the top right).
     update: crate::update::State,
@@ -282,6 +282,7 @@ impl Shell {
             feed_w: if saved.feed { FEED_OPEN_W } else { FEED_CLOSED_W },
             feed_last: Instant::now(),
             project_menu: false,
+            range_menu: false,
             language_menu: false,
             machines_menu: false,
             machine_name,
@@ -291,7 +292,6 @@ impl Shell {
             menu_opens: 0,
             menu_scroll: crate::glide::Glide::default(),
             tab_seg: crate::seg::Seg::default(),
-            range_seg: crate::seg::Seg::default(),
             replay: None,
             update: crate::update::State::Idle,
             clock_bar: Rc::default(),
@@ -505,31 +505,75 @@ impl Shell {
         })
         .collect();
         let tab_index = [Tab::Map, Tab::Timeline, Tab::Usage, Tab::Machine].iter().position(|t| *t == self.tab).unwrap_or(0);
-        let range_index = RANGES.iter().position(|r| r.1 == self.filters.range_h).unwrap_or(0);
-        let ranges = RANGES
-            .into_iter()
-            .map(|(label, h)| {
-                button(format!("range-{label}").into(), range_label(label).into(), self.filters.range_h == h)
-                    .on_click(cx.listener(move |s, _, _, cx| s.filter(|f| f.range_h = h, cx)))
-                    .into_any_element()
-            })
-            .collect();
         // Rendered now: the closures below keep `cx` borrowed.
         let tabs = self.tab_seg.render(tab_index, tabs, window, cx);
-        let ranges = self.range_seg.render(range_index, ranges, window, cx);
-        let toggle = |id: &'static str, label: String, on: bool, flip: fn(&mut Filters)| {
-            ctl(id, false)
-                .child(
-                    div()
-                        .size(px(12.0))
-                        .rounded(px(3.0))
-                        .border_1()
-                        .border_color(if on { blue() } else { muted() })
-                        .when(on, |d| d.bg(blue())),
-                )
-                .child(label)
-                .on_click(cx.listener(move |s, _, _, cx| s.filter(flip, cx)))
+        // A menu under its button, in the bar's look.
+        let popup = |id: &'static str, menu: Div, closed: &'static str| {
+            deferred(
+                menu.id(id)
+                    .absolute()
+                    .top(px(34.0))
+                    .left_0()
+                    // An open menu takes the pointer: nothing behind it scrolls or reacts.
+                    .occlude()
+                    .p(px(4.0))
+                    .rounded(px(10.0))
+                    .bg(panel())
+                    .border_1()
+                    .border_color(rgba(0xffffff1f))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(move |s, _, _, cx| {
+                        (s.project_menu, s.range_menu) = (false, false);
+                        s.menu_closed = Some((closed, Instant::now()));
+                        cx.notify();
+                    }))
+                    .with_animation(
+                        SharedString::from(format!("{id}-{}", self.menu_opens)),
+                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
+                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                    ),
+            )
+            .with_priority(1)
         };
+        let item = |id: String, on: bool| {
+            div()
+                .id(SharedString::from(id))
+                .px(px(10.0))
+                .py(px(5.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .text_color(if on { blue() } else { text() })
+                .whitespace_nowrap()
+                .hover(|s| s.bg(panel_hi()))
+        };
+        // The range: its button says which; the others are in its menu.
+        let range_now = RANGES.iter().find(|r| r.1 == self.filters.range_h).map_or("24h", |r| r.0);
+        let range_menu = self.range_menu.then(|| {
+            let rows = RANGES.into_iter().map(|(label, h)| {
+                item(format!("range-{label}"), self.filters.range_h == h).child(range_label(label)).on_click(cx.listener(
+                    move |s, _, _, cx| {
+                        s.range_menu = false;
+                        s.filter(|f| f.range_h = h, cx);
+                    },
+                ))
+            });
+            popup("range-menu", div().min_w(px(110.0)).children(rows), "range")
+        });
+        let range = div()
+            .relative()
+            .child(
+                ctl("range", self.range_menu)
+                    .child(crate::icons::line(gpui_kit::assets::IconName::Clock, muted(), 13.0))
+                    .child(range_label(range_now))
+                    .child(div().text_color(muted()).child("▾"))
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.range_menu = !s.range_menu && s.reopens("range");
+                        s.menu_opens += 1;
+                        cx.notify();
+                    })),
+            )
+            .children(range_menu);
         let stats = self.graph.as_ref().filter(|_| wide).map(|g| {
             let v = visible(g, &self.filters, now_ms());
             let sessions = v.nodes.iter().filter(|&&i| is_session(&g.nodes[i])).count();
@@ -559,24 +603,14 @@ impl Shell {
         let mut projects: Vec<(&str, usize)> = counts.into_iter().collect();
         projects.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         let current = self.filters.project.clone();
+        let hidden = !self.filters.archived || !self.filters.agents;
         let menu = self.project_menu.then(|| {
             let row = |id: String, label: String, pick: Option<String>, on: bool| {
-                div()
-                    .id(SharedString::from(id))
-                    .px(px(10.0))
-                    .py(px(5.0))
-                    .rounded(px(6.0))
-                    .cursor_pointer()
-                    .text_size(px(12.0))
-                    .text_color(if on { blue() } else { text() })
-                    .whitespace_nowrap()
-                    .hover(|s| s.bg(panel_hi()))
-                    .child(label)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.project_menu = false;
-                        let pick = pick.clone();
-                        s.filter(|f| f.project = pick, cx);
-                    }))
+                item(id, on).child(label).on_click(cx.listener(move |s, _, _, cx| {
+                    s.project_menu = false;
+                    let pick = pick.clone();
+                    s.filter(|f| f.project = pick, cx);
+                }))
             };
             let mut rows = vec![row("p-all".into(), t!("shell.all_projects").into_owned(), None, current.is_none())];
             rows.extend(
@@ -584,46 +618,49 @@ impl Shell {
                     .iter()
                     .map(|(p, c)| row(format!("p-{p}"), format!("{p} · {c}"), Some(p.to_string()), current.as_deref() == Some(*p))),
             );
-            deferred(
-                div()
-                    .id("project-menu")
-                    .absolute()
-                    .top(px(34.0))
-                    .left_0()
-                    .min_w(px(180.0))
-                    .max_h(px(360.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.menu_scroll.handle)
-                    // An open menu takes the pointer: nothing behind it scrolls or reacts.
-                    .occlude()
-                    .p(px(4.0))
-                    .rounded(px(10.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(rgba(0xffffff1f))
-                    .shadow_lg()
-                    .children(rows)
-                    .child(self.menu_scroll.driver())
-                    .on_mouse_down_out(cx.listener(|s, _, _, cx| {
-                        s.project_menu = false;
-                        s.menu_closed = Some(("project", Instant::now()));
-                        cx.notify();
-                    }))
-                    .with_animation(
-                        SharedString::from(format!("menu-{}", self.menu_opens)),
-                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
-                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
-                    ),
-            )
-            .with_priority(1)
+            // What else the map and the timeline show; the menu stays open to flip both.
+            let check = |id: &'static str, label: String, on: bool, flip: fn(&mut Filters)| {
+                item(id.into(), false)
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .size(px(12.0))
+                            .rounded(px(3.0))
+                            .border_1()
+                            .border_color(if on { blue() } else { muted() })
+                            .when(on, |d| d.bg(blue())),
+                    )
+                    .child(label)
+                    .on_click(cx.listener(move |s, _, _, cx| s.filter(flip, cx)))
+            };
+            let list = div()
+                .id("project-list")
+                .max_h(px(300.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.menu_scroll.handle)
+                .children(rows)
+                .child(self.menu_scroll.driver());
+            let checks = div()
+                .mt(px(4.0))
+                .pt(px(4.0))
+                .border_t_1()
+                .border_color(line())
+                .child(check("archived", t!("shell.archived").into_owned(), self.filters.archived, |f| f.archived = !f.archived))
+                .child(check("agents", t!("shell.subagents").into_owned(), self.filters.agents, |f| f.agents = !f.agents));
+            popup("project-menu", div().min_w(px(200.0)).child(list).child(checks), "project")
         });
         let project = div()
             .relative()
             .child(
                 ctl("project", current.is_some())
+                    .relative()
                     .max_w(px(150.0))
                     .child(div().overflow_hidden().child(clip(current.as_deref().unwrap_or(&t!("shell.all_projects")), 16)))
                     .child(div().text_color(muted()).child("▾"))
+                    // Archived sessions or subagents hidden (from its menu): a dot says the map shows less.
+                    .when(hidden, |d| d.child(div().absolute().top(px(4.0)).right(px(4.0)).size(px(6.0)).rounded_full().bg(blue())))
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.project_menu = !s.project_menu && s.reopens("project");
                         s.menu_opens += 1;
@@ -647,17 +684,14 @@ impl Shell {
         let replaying = self.replay.is_some();
         // The tabs come first and never move; the window's title already names the app. When the window is too
         // narrow for one row, the map's controls go to a second row, which wraps again if it must.
-        let one_row = !map_tab || f32::from(window.viewport_size().width) >= 1320.0 + labels_extra(window);
+        let one_row = !map_tab || f32::from(window.viewport_size().width) >= 900.0 + labels_extra(window);
         let narrow = f32::from(window.viewport_size().width) < NARROW;
         let panel_on = if narrow { self.panel_narrow_open } else { self.panel_open };
         let controls: Vec<AnyElement> = if map_tab {
             vec![
-                ranges.into_any_element(),
+                range.into_any_element(),
                 div().w(px(120.0)).flex_shrink_0().child(Input::new(&self.search)).into_any_element(),
                 project.into_any_element(),
-                toggle("archived", t!("shell.archived").into_owned(), self.filters.archived, |f| f.archived = !f.archived)
-                    .into_any_element(),
-                toggle("agents", t!("shell.subagents").into_owned(), self.filters.agents, |f| f.agents = !f.agents).into_any_element(),
                 ctl("panel-toggle", panel_on)
                     .child(panel_icon(panel_on))
                     .on_click(cx.listener(move |s, _, _, cx| {
@@ -694,9 +728,8 @@ impl Shell {
             .gap(px(12.0))
             .child(tabs)
             .children(stats.filter(|_| map_tab))
-            // The loader lies over the free room after the tabs and counters, whatever their width in this language.
-            .child(div().relative().self_stretch().w(px(0.0)).children(self.loader()))
-            .child(div().flex_1());
+            // The loader lies in the free room after the tabs and counters, cut to it when the window is narrow.
+            .child(div().flex_1().min_w_0().self_stretch().relative().overflow_hidden().children(self.loader()));
         let language = self.language_button(cx);
         let machines = self.machines_button(cx);
         let bar = div().px(px(16.0)).py(px(10.0)).border_b_1().border_color(line());
@@ -730,6 +763,7 @@ impl Shell {
                     .flex_col()
                     .gap(px(5.0))
                     .w(px(180.0))
+                    .max_w(relative(1.0))
                     .child(
                         div()
                             .flex()
@@ -1412,21 +1446,13 @@ fn feed_closed_w(window: &mut Window) -> f32 {
 
 /// How much wider the top bar's labels are in this language than in English, whose bar fits on one row from 1320 px.
 fn labels_extra(window: &mut Window) -> f32 {
-    const KEYS: [&str; 15] = [
+    const KEYS: [&str; 7] = [
         "shell.tab.map",
         "shell.tab.timeline",
         "shell.tab.usage",
         "shell.tab.machine",
-        "shell.range.6h",
         "shell.range.24h",
-        "shell.range.3d",
-        "shell.range.7d",
-        "shell.range.14d",
-        "shell.range.30d",
-        "shell.range.all",
         "shell.all_projects",
-        "shell.archived",
-        "shell.subagents",
         "shell.replay",
     ];
     let mut extra = 0.0;
