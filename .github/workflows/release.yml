@@ -96,7 +96,7 @@ jobs:
           $h = [W]::FindWindowW("Zed::Window", "Asterism")
           if ($h -eq [IntPtr]::Zero) { throw "no Asterism window" }
           $menu = [W]::GetSystemMenu($h, $false)
-          foreach ($id in 0x1010, 0x1020) {
+          foreach ($id in 0x1010, 0x1020, 0x1030) {
             $text = New-Object System.Text.StringBuilder 128
             [void][W]::GetMenuStringW($menu, $id, $text, 128, 0)
             "window menu item ${id}: $text"
