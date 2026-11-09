@@ -177,6 +177,8 @@ pub mod windows_menu {
     pub fn attach(window: &Window) {
         let Some(hwnd) = hwnd(window) else { return };
         WINDOW.store(hwnd.0 as isize, Ordering::Relaxed);
+        // SAFETY: `hwnd` is this window's handle, alive while GPUI holds the window; the strings outlive each call;
+        // `on_message` has the signature a subclass procedure must have.
         unsafe {
             let menu = GetSystemMenu(hwnd, false);
             AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
@@ -193,6 +195,8 @@ pub mod windows_menu {
         if hwnd.0.is_null() {
             return;
         }
+        // SAFETY: `hwnd` was stored by `attach` from the live window, and Windows checks the handle itself: on a
+        // closed window these calls fail, which is ignored. The strings outlive each call.
         unsafe {
             let menu = GetSystemMenu(hwnd, false);
             ModifyMenuW(menu, CHECK as u32, MF_BYCOMMAND | MF_STRING, CHECK, &HSTRING::from(&*t!("menu.check"))).ok();
@@ -201,22 +205,29 @@ pub mod windows_menu {
         }
     }
 
+    /// The window's subclass procedure.
+    ///
+    /// # Safety
+    /// Only Windows calls it, as the procedure `attach` registered: `hwnd` is that window.
     unsafe extern "system" fn on_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
-        let id = wparam.0 & 0xFFF0;
+        let id = wparam.0 & 0xfff0;
         if msg == WM_SYSCOMMAND && (id == CHECK || id == ABOUT || id == SETTINGS) {
             if let Some(tx) = CLICKS.get() {
                 tx.send(id).ok();
             }
             return LRESULT(0);
         }
+        // SAFETY: the arguments are the ones Windows gave this procedure, passed on unchanged.
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
     }
 
     /// Started from the taskbar icon's menu (`--dock-action <n>`) while Asterism already runs: the running window gets
     /// the command, as if its own menu had been clicked. False when no Asterism window is open.
     pub fn forward(action: usize) -> bool {
+        // SAFETY: both names are NUL-terminated constants.
         let Ok(hwnd) = (unsafe { FindWindowW(w!("Zed::Window"), w!("Asterism")) }) else { return false };
         let id = if action == 0 { CHECK } else { ABOUT };
+        // SAFETY: the message carries two integers and no pointer; Windows checks `hwnd` and fails if it is gone.
         unsafe { PostMessageW(Some(hwnd), WM_SYSCOMMAND, WPARAM(id), LPARAM(0)).is_ok() }
     }
 }

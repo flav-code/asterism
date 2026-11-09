@@ -5,14 +5,14 @@
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
 
 /// What the bar shows, for the checking thread and a check asked from a menu.
 static STATE: OnceLock<watch::Sender<State>> = OnceLock::new();
 /// One check at a time: the thread's and a menu's would download the same file.
-static CHECKING: Mutex<()> = Mutex::new(());
+static CHECKING: Mutex<()> = Mutex::const_new(());
 
 pub const REPO: &str = "flav-code/asterism";
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -132,7 +132,9 @@ pub fn check_now() -> Checked {
 }
 
 fn check_once(tx: &watch::Sender<State>) -> Result<(), String> {
-    let _one = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
+    // Tokio's lock, taken from plain threads: unlike std's it is never poisoned, so a check that panicked does not
+    // stop the next ones.
+    let _one = CHECKING.blocking_lock();
     if matches!(*tx.borrow(), State::Ready { .. }) {
         return Ok(()); // already downloaded: it waits for its click
     }

@@ -64,7 +64,7 @@ impl Glide {
 
     /// Moves the scroll so the thumb's top is at `top` (window y).
     fn drag_to(&self, top: f32) {
-        let Some((t, max)) = self.thumb(true) else { return };
+        let Some((t, max)) = self.thumb(true /* wide */) else { return };
         let b = self.handle.bounds();
         let room = (f32::from(b.size.height) - f32::from(t.size.height)).max(1.0);
         let frac = ((top - f32::from(b.top())) / room).clamp(0.0, 1.0);
@@ -113,7 +113,7 @@ impl Glide {
             {
                 return;
             }
-            let Some((t, _)) = glide.thumb(true) else { return };
+            let Some((t, _)) = glide.thumb(true /* wide */) else { return };
             let py = f32::from(e.position.y);
             let grab = if t.contains(&point(t.origin.x, e.position.y)) { py - f32::from(t.top()) } else { f32::from(t.size.height) / 2.0 };
             glide.bar.borrow_mut().drag = Some(grab);

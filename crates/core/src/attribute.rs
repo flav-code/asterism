@@ -25,18 +25,19 @@ const SYSTEM_PATHS: &[&str] = &["/System/", "/usr/libexec/", "/usr/sbin/", "/sbi
 const ROWS_PER_SESSION: usize = 60;
 const CMD_MAX: usize = 300;
 
-pub struct Inputs<'a> {
+/// One sample of the machine, borrowed from the samplers for the time of an attribution.
+pub struct Inputs<'sample> {
     /// Now, in ms since the epoch.
     pub at: u64,
     pub host: Host,
-    pub procs: &'a [Proc],
-    pub sessions: &'a [SessionMeta],
+    pub procs: &'sample [Proc],
+    pub sessions: &'sample [SessionMeta],
     /// Session id → what it is running.
-    pub activities: &'a HashMap<String, Activity>,
+    pub activities: &'sample HashMap<String, Activity>,
     pub containers: Vec<Container>,
     pub docker: Option<DockerInfo>,
     /// The home folder: shown as `~`, and never a folder that claims containers.
-    pub home: &'a str,
+    pub home: &'sample str,
 }
 
 #[derive(Debug, Serialize)]

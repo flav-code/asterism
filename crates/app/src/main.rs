@@ -9,6 +9,7 @@ mod demo;
 mod glide;
 mod icons;
 mod layout;
+mod machine_view;
 mod machines;
 mod map;
 mod menus;
@@ -20,7 +21,6 @@ mod state;
 mod timeline;
 mod ui;
 mod update;
-mod view;
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
@@ -119,7 +119,7 @@ fn main() {
         gpui_kit::open_window(options, cx, |window, cx| {
             #[cfg(windows)]
             menus::windows_menu::attach(window);
-            let machine = cx.new(|cx| view::Machine::new(rx, window, cx));
+            let machine = cx.new(|cx| machine_view::MachineView::new(rx, window, cx));
             let shell = cx.new(|cx| shell::Shell::new(machine, grx, update::start(), window, cx));
             cx.set_global(shell::ShellHandle(shell.downgrade()));
             shell

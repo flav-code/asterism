@@ -1,6 +1,7 @@
 //! The window: a header (counters, tabs, range, search, project, filters, panel, replay) above the tab on screen.
 //! The map and the timeline share a side panel, a live feed and a replay of the range's messages.
 use crate::dash::{DashEvent, DashView};
+use crate::machine_view::MachineView;
 use crate::map::{MapEvent, MapView};
 use crate::panel::{self, Panel, PanelEvent};
 use crate::settings::{self, Settings};
@@ -8,7 +9,6 @@ use crate::state::{Filters, RANGES, is_session, norm, visible, working};
 use crate::timeline::{TimelineEvent, TimelineView};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
-use crate::view::Machine;
 use asterism_core::graph::{Graph, Msg, MsgKind, NodeKind, UsageView};
 use asterism_core::i18n;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -41,6 +41,10 @@ impl Tab {
             Tab::Machine => "machine",
         }
     }
+}
+
+/// A saved tab's name; the map for a name that is none.
+impl From<&str> for Tab {
     fn from(name: &str) -> Tab {
         match name {
             "timeline" => Tab::Timeline,
@@ -128,7 +132,7 @@ pub struct Shell {
     timeline: Entity<TimelineView>,
     dash: Entity<DashView>,
     panel: Entity<Panel>,
-    machine: Entity<Machine>,
+    machine: Entity<MachineView>,
     search: Entity<InputState>,
     /// The side panel: wanted open, its width on screen, when it last moved.
     panel_open: bool,
@@ -178,7 +182,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(
-        machine: Entity<Machine>,
+        machine: Entity<MachineView>,
         mut feed: GraphFeed,
         mut updates: watch::Receiver<crate::update::State>,
         window: &mut Window,
@@ -253,7 +257,7 @@ impl Shell {
             }
         });
         let saved = cx.global::<Settings>().clone();
-        let tab = Tab::from(&std::env::var("MDB_TAB").unwrap_or(saved.tab.clone()));
+        let tab = Tab::from(std::env::var("MDB_TAB").unwrap_or(saved.tab.clone()).as_str());
         let range = std::env::var("MDB_RANGE").unwrap_or(saved.range.clone());
         let filters = Filters {
             range_h: RANGES.iter().find(|(label, _)| *label == range).map_or(Some(24.0), |r| r.1),
@@ -609,7 +613,8 @@ impl Shell {
 
         // Projects, the busiest first, in a menu under their button.
         let mut counts: HashMap<&str, usize> = HashMap::new();
-        for n in self.graph.iter().flat_map(|g| g.nodes.iter()).filter(|n| is_session(n)) {
+        let sessions = self.graph.iter().flat_map(|g| g.nodes.iter()).filter(|n| is_session(n));
+        for n in sessions {
             *counts.entry(n.project.as_str()).or_default() += 1;
         }
         let mut projects: Vec<(&str, usize)> = counts.into_iter().collect();
@@ -1725,7 +1730,8 @@ fn wheel_frames(window: &mut Window, w: Wheel, sent: usize, saved: usize) {
         let clicks = std::env::var("MDB_CLICKS").unwrap_or_else(|_| {
             if std::env::var("MDB_CLICK").is_ok() { format!("{},{}@0", f32::from(w.at.x), f32::from(w.at.y)) } else { String::new() }
         });
-        for (i, c) in clicks.split(';').filter(|c| !c.is_empty()).enumerate() {
+        let timed = clicks.split(';').filter(|c| !c.is_empty()).enumerate();
+        for (i, c) in timed {
             let (xy, at) = c.split_once('@').unwrap_or((c, "0"));
             let at: f32 = at.parse().unwrap_or(0.0);
             let done = CLICKED.with(|d| d.get() > i);

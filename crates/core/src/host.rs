@@ -156,6 +156,7 @@ mod mac {
 
     #[allow(deprecated)] // libc points to the mach2 crate for these, but they work and save a dependency
     pub fn vm_stats() -> Option<VmStats> {
+        // SAFETY: vm_statistics64 holds only integers, for which all zeroes is a value.
         let mut v: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
         let mut count = libc::HOST_VM_INFO64_COUNT;
         // SAFETY: `v` is a vm_statistics64 and `count` holds its size in integers, as host_statistics64 expects.

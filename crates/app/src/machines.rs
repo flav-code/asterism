@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -46,6 +46,11 @@ struct Worker {
 
 static WORKERS: LazyLock<Mutex<HashMap<String, Worker>>> = LazyLock::new(Default::default);
 
+/// Locks one of this module's mutexes.
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().expect("poisoned only if a thread of this module panicked while holding it, which is a bug to fix there")
+}
+
 /// Why a machine can't be added as given (a text for the person adding it), against the names already taken.
 pub fn check(name: &str, target: &str, taken: &[Machine]) -> Result<(), String> {
     let (name, target) = (name.trim(), target.trim());
@@ -67,15 +72,15 @@ pub fn check(name: &str, target: &str, taken: &[Machine]) -> Result<(), String> 
 
 /// Starts a connection for each machine of the list and stops those no longer in it (or changed).
 pub fn sync(machines: &[Machine], lang: &str) {
-    let mut workers = WORKERS.lock().unwrap();
+    let mut workers = locked(&WORKERS);
     workers.retain(|name, w| {
         let keep = w.lang == lang && machines.iter().any(|m| m == &w.machine);
         if !keep {
             w.stop.store(true, Ordering::Relaxed);
-            if let Some(child) = w.ssh.lock().unwrap().as_mut() {
+            if let Some(child) = locked(&w.ssh).as_mut() {
                 child.kill().ok();
             }
-            REMOTES.lock().unwrap().remove(name);
+            locked(&REMOTES).remove(name);
         }
         keep
     });
@@ -83,7 +88,7 @@ pub fn sync(machines: &[Machine], lang: &str) {
     for m in &new {
         let w = Worker { machine: m.clone(), lang: lang.to_string(), stop: Arc::default(), ssh: Arc::default() };
         let (machine, lang, stop, ssh) = (w.machine.clone(), w.lang.clone(), w.stop.clone(), w.ssh.clone());
-        REMOTES.lock().unwrap().insert(m.name.clone(), Remote { status: Status::Connecting, graph: None, usage: None });
+        locked(&REMOTES).insert(m.name.clone(), Remote { status: Status::Connecting, graph: None, usage: None });
         std::thread::Builder::new()
             .name(format!("machine {}", m.name))
             .spawn(move || follow(&machine, &lang, &stop, &ssh))
@@ -94,13 +99,13 @@ pub fn sync(machines: &[Machine], lang: &str) {
 
 /// A machine's state, and how many sessions it has on the map.
 pub fn status(name: &str) -> Option<(Status, usize)> {
-    let remotes = REMOTES.lock().unwrap();
+    let remotes = locked(&REMOTES);
     let r = remotes.get(name)?;
     Some((r.status.clone(), r.graph.as_ref().map_or(0, |g| g.nodes.iter().filter(|n| crate::state::is_session(n)).count())))
 }
 
 fn set(name: &str, f: impl FnOnce(&mut Remote)) {
-    if let Some(r) = REMOTES.lock().unwrap().get_mut(name) {
+    if let Some(r) = locked(&REMOTES).get_mut(name) {
         f(r);
     }
 }
@@ -111,7 +116,7 @@ pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) 
     /// The usages it was made of (their addresses), and the result.
     type Merged = (Vec<usize>, Option<Arc<UsageView>>);
     static USAGE: LazyLock<Mutex<Merged>> = LazyLock::new(Default::default);
-    let remotes = REMOTES.lock().unwrap();
+    let remotes = locked(&REMOTES);
     let mut names: Vec<&String> = remotes.keys().collect();
     names.sort();
     let graphs: Vec<(&str, &Graph)> = names.iter().filter_map(|n| Some((n.as_str(), &**remotes[*n].graph.as_ref()?))).collect();
@@ -121,7 +126,7 @@ pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) 
         return (g, u);
     }
     let key: Vec<usize> = std::iter::once(Arc::as_ptr(&u) as usize).chain(usages.iter().map(|u| Arc::as_ptr(u) as usize)).collect();
-    let mut cache = USAGE.lock().unwrap();
+    let mut cache = locked(&USAGE);
     if cache.0 != key || cache.1.is_none() {
         let others: Vec<&UsageView> = usages.iter().map(|u| &***u).collect();
         *cache = (key, Some(Arc::new(merge_usage(&u, &others))));
@@ -201,13 +206,13 @@ fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child
         .spawn()
         .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { t!("machines.error.no_ssh").into_owned() } else { e.to_string() })?;
     let (stdout, stderr) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
-    *slot.lock().unwrap() = Some(child);
+    *locked(slot) = Some(child);
     let said = Arc::new(Mutex::new(String::new()));
     let said_too = said.clone();
     let errors = std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if !line.trim().is_empty() {
-                *said_too.lock().unwrap() = line.trim().to_string();
+                *locked(&said_too) = line.trim().to_string();
             }
         }
     });
@@ -232,12 +237,12 @@ fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child
             r.usage = u.or(r.usage.take());
         });
     }
-    if let Some(mut c) = slot.lock().unwrap().take() {
+    if let Some(mut c) = locked(slot).take() {
         c.kill().ok();
         c.wait().ok();
     }
     errors.join().ok();
-    let said = said.lock().unwrap().clone();
+    let said = locked(&said).clone();
     if install.is_some() || stop.load(Ordering::Relaxed) || said.is_empty() { Ok(install) } else { Err(explain(&said, &m.target)) }
 }
 

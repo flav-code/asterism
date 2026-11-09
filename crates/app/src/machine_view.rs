@@ -30,7 +30,7 @@ fn unfold() -> Duration {
     UNFOLD
 }
 
-pub struct Machine {
+pub struct MachineView {
     report: Option<Arc<Report>>,
     /// The report before: each number shows if it went up or down since.
     prev: Option<Arc<Report>>,
@@ -54,7 +54,7 @@ pub struct Machine {
     snapshot_taken: bool,
 }
 
-impl Machine {
+impl MachineView {
     pub fn new(mut rx: watch::Receiver<Option<Arc<Report>>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let updates = cx.spawn(async move |this, cx| {
             while rx.changed().await.is_ok() {
@@ -572,7 +572,7 @@ impl Machine {
 }
 
 #[cfg(feature = "snapshot")]
-impl Machine {
+impl MachineView {
     /// `MDB_SNAPSHOT=<file.png>`: once the first report is drawn, save the frame and quit.
     /// `MDB_SNAPSHOT_OPEN=1` opens the biggest session first.
     /// `MDB_SNAPSHOT_FRAMES=<folder>`: click the biggest session open and save frames while it unfolds.
@@ -719,7 +719,7 @@ fn container(c: &ContainerView) -> Div {
         .child(num(cpu(c.cpu)).w(px(56.)).flex().justify_end().text_color(muted()))
 }
 
-impl Render for Machine {
+impl Render for MachineView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.));
         let Some(r) = self.report.clone() else {
