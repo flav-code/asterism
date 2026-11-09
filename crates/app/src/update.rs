@@ -5,8 +5,14 @@
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::watch;
+
+/// What the bar shows, for the checking thread and a check asked from a menu.
+static STATE: OnceLock<watch::Sender<State>> = OnceLock::new();
+/// One check at a time: the thread's and a menu's would download the same file.
+static CHECKING: Mutex<()> = Mutex::new(());
 
 pub const REPO: &str = "flav-code/asterism";
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -63,7 +69,8 @@ pub fn newer(remote: &str, local: &str) -> bool {
 
 /// Starts the checking thread; the returned channel says what the bar should show.
 pub fn start() -> watch::Receiver<State> {
-    let (tx, rx) = watch::channel(State::Idle);
+    let tx = STATE.get_or_init(|| watch::channel(State::Idle).0);
+    let rx = tx.subscribe();
     // What an earlier update left behind (its download, the copied bundle) goes; a pending one downloads again.
     std::fs::remove_dir_all(std::env::temp_dir().join("asterism-update")).ok();
     if installed_at().is_none() || std::env::var("ASTERISM_NO_UPDATES").is_ok() {
@@ -75,7 +82,7 @@ pub fn start() -> watch::Receiver<State> {
             // ASTERISM_UPDATE_URL (a test release) checks right away.
             std::thread::sleep(if std::env::var("ASTERISM_UPDATE_URL").is_ok() { Duration::from_secs(2) } else { FIRST_CHECK });
             loop {
-                if let Err(e) = check(&tx) {
+                if let Err(e) = check_once(tx) {
                     eprintln!("update check: {e}");
                 }
                 if matches!(*tx.borrow(), State::Ready { .. }) || tx.is_closed() {
@@ -90,6 +97,46 @@ pub fn start() -> watch::Receiver<State> {
 
 pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(600))).build().into()
+}
+
+/// What a check asked from a menu found.
+pub enum Checked {
+    UpToDate,
+    /// This version is downloaded: the green arrow installs it.
+    Ready(String),
+    /// Scoop installed it, and updates it.
+    Scoop,
+    /// It runs from a build folder.
+    NotInstalled,
+    /// ASTERISM_NO_UPDATES is set.
+    Off,
+    Failed(String),
+}
+
+/// Checks right now (and downloads a newer version), whatever the thread's schedule. It blocks until done.
+pub fn check_now() -> Checked {
+    if std::env::var("ASTERISM_NO_UPDATES").is_ok() {
+        return Checked::Off;
+    }
+    let (Some(_), Some(tx)) = (installed_at(), STATE.get()) else {
+        let exe = std::env::current_exe().unwrap_or_default().to_string_lossy().to_lowercase().replace('\\', "/");
+        return if exe.contains("/scoop/apps/") { Checked::Scoop } else { Checked::NotInstalled };
+    };
+    if let Err(e) = check_once(tx) {
+        return Checked::Failed(e);
+    }
+    match &*tx.borrow() {
+        State::Ready { version, .. } | State::Downloading { version, .. } => Checked::Ready(version.clone()),
+        State::Idle => Checked::UpToDate,
+    }
+}
+
+fn check_once(tx: &watch::Sender<State>) -> Result<(), String> {
+    let _one = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(*tx.borrow(), State::Ready { .. }) {
+        return Ok(()); // already downloaded: it waits for its click
+    }
+    check(tx)
 }
 
 fn check(tx: &watch::Sender<State>) -> Result<(), String> {

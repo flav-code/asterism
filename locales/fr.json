@@ -231,6 +231,20 @@
       "subagent": "sous-agent"
     }
   },
+  "menu": {
+    "about": "À propos d'Asterism",
+    "about_detail": "Toutes les sessions d'agents de code IA de votre machine, d'un coup d'œil.",
+    "check": "Rechercher des mises à jour…",
+    "services": "Services",
+    "hide": "Masquer Asterism",
+    "hide_others": "Masquer les autres",
+    "show_all": "Tout afficher",
+    "quit": "Quitter Asterism",
+    "window": "Fenêtre",
+    "minimize": "Placer dans le Dock",
+    "zoom": "Réduire/agrandir",
+    "ok": "OK"
+  },
   "origin": {
     "here": "Cet ordinateur",
     "elsewhere": "Cloud ou autre ordinateur"
@@ -327,6 +341,21 @@
     "mb_s": "%{n} Mo/s",
     "days": "%{n} j",
     "ago": "il y a %{time}"
+  },
+  "update": {
+    "check": {
+      "up_to_date": "Asterism %{version} est à jour",
+      "up_to_date_detail": "Il vérifie aussi tout seul, toutes les 6 heures.",
+      "ready": "Asterism %{version} est prêt",
+      "ready_detail": "Cliquez sur la flèche verte en haut à droite de la fenêtre pour redémarrer dessus.",
+      "scoop": "Installé avec Scoop",
+      "scoop_detail": "C'est Scoop qui le met à jour : lancez scoop update asterism.",
+      "not_installed": "Cette copie ne se met pas à jour",
+      "not_installed_detail": "Elle tourne depuis un dossier de build. Installez Asterism depuis ses releases sur GitHub pour avoir les mises à jour.",
+      "off": "Les mises à jour sont coupées",
+      "off_detail": "ASTERISM_NO_UPDATES est défini.",
+      "failed": "Impossible de vérifier les mises à jour"
+    }
   },
   "view": {
     "loading": "Lecture de la machine…",

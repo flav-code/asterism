@@ -231,6 +231,20 @@
       "subagent": "subagent"
     }
   },
+  "menu": {
+    "about": "About Asterism",
+    "about_detail": "Every AI coding agent session on your machine at once.",
+    "check": "Check for Updates…",
+    "services": "Services",
+    "hide": "Hide Asterism",
+    "hide_others": "Hide Others",
+    "show_all": "Show All",
+    "quit": "Quit Asterism",
+    "window": "Window",
+    "minimize": "Minimize",
+    "zoom": "Zoom",
+    "ok": "OK"
+  },
   "origin": {
     "here": "This computer",
     "elsewhere": "Cloud or another computer"
@@ -327,6 +341,21 @@
     "mb_s": "%{n} MB/s",
     "days": "%{n} d",
     "ago": "%{time} ago"
+  },
+  "update": {
+    "check": {
+      "up_to_date": "Asterism %{version} is up to date",
+      "up_to_date_detail": "It also checks on its own, every 6 hours.",
+      "ready": "Asterism %{version} is ready",
+      "ready_detail": "Click the green arrow at the top right of the window to restart on it.",
+      "scoop": "Installed with Scoop",
+      "scoop_detail": "Scoop updates it: run scoop update asterism.",
+      "not_installed": "This copy doesn't update itself",
+      "not_installed_detail": "It runs from a build folder. Install Asterism from its releases on GitHub to get updates.",
+      "off": "Updates are turned off",
+      "off_detail": "ASTERISM_NO_UPDATES is set.",
+      "failed": "Couldn't check for updates"
+    }
   },
   "view": {
     "loading": "Reading the machine…",

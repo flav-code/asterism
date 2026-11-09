@@ -62,6 +62,30 @@ jobs:
         run: |
           $p = Start-Process target\release\asterism.exe -PassThru
           Start-Sleep 20
+          # The window's own menu (its icon in the title bar) has the app's items, and the taskbar icon's menu
+          # (a second asterism.exe --dock-action 0) hands its command to the open window, which says this copy
+          # doesn't update itself: the dialog is in the screenshot.
+          Add-Type @'
+          using System; using System.Runtime.InteropServices; using System.Text;
+          public static class W {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
+            [DllImport("user32.dll")] public static extern IntPtr GetSystemMenu(IntPtr h, bool revert);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuStringW(IntPtr m, uint id, StringBuilder s, int n, uint flags);
+          }
+          '@
+          $h = [W]::FindWindowW("Zed::Window", "Asterism")
+          if ($h -eq [IntPtr]::Zero) { throw "no Asterism window" }
+          $menu = [W]::GetSystemMenu($h, $false)
+          foreach ($id in 0x1010, 0x1020) {
+            $text = New-Object System.Text.StringBuilder 128
+            [void][W]::GetMenuStringW($menu, $id, $text, 128, 0)
+            "window menu item ${id}: $text"
+            if ($text.Length -eq 0) { throw "window menu item $id missing" }
+          }
+          $second = Start-Process target\release\asterism.exe -ArgumentList "--dock-action", "0" -PassThru
+          if (-not $second.WaitForExit(15000)) { throw "the second asterism.exe kept running instead of handing over" }
+          Start-Sleep 4
+          if ([W]::FindWindowW("#32770", $null) -eq [IntPtr]::Zero) { throw "no dialog after Check for updates" }
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height

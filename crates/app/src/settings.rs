@@ -163,8 +163,9 @@ pub fn set_language(cx: &mut App, language: Option<String>) {
 pub fn apply_language(cx: &mut App) {
     let lang = cx.global::<Settings>().language.clone();
     i18n::set(lang.as_deref().unwrap_or_else(|| system_language()));
-    // The other machines' agents name things in this language too.
+    // The other machines' agents name things in this language too, and so do the system's menus.
     crate::machines::sync(&cx.global::<Settings>().machines, &i18n::current());
+    crate::menus::set(cx);
     cx.refresh_windows();
 }
 

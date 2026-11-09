@@ -11,6 +11,7 @@ mod icons;
 mod layout;
 mod machines;
 mod map;
+mod menus;
 mod panel;
 mod seg;
 mod settings;
@@ -31,6 +32,12 @@ use std::time::Duration;
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
 fn main() {
+    // Started from the taskbar icon's menu (`--dock-action <n>`): an Asterism already open does it, and this one stops.
+    let dock_action = std::env::args().skip_while(|a| a != "--dock-action").nth(1).and_then(|n| n.parse::<usize>().ok());
+    #[cfg(windows)]
+    if dock_action.is_some_and(menus::windows_menu::forward) {
+        return;
+    }
     let (tx, rx) = tokio::sync::watch::channel(None::<Arc<Report>>);
     std::thread::Builder::new()
         .name("machine".into())
@@ -66,7 +73,25 @@ fn main() {
         #[cfg(not(feature = "snapshot"))]
         settings::move_old_data();
         cx.set_global(settings::Settings::load());
+        menus::init(cx);
         settings::apply_language(cx);
+        // Snapshot builds: MDB_MENUS=1 prints the menus set, to check them without a screen.
+        #[cfg(feature = "snapshot")]
+        if std::env::var("MDB_MENUS").is_ok() {
+            for m in cx.get_menus().unwrap_or_default() {
+                let items: Vec<String> = m
+                    .items
+                    .iter()
+                    .map(|i| match i {
+                        gpui_kit::OwnedMenuItem::Action { name, action, .. } => format!("{name} ({})", action.name()),
+                        gpui_kit::OwnedMenuItem::SystemMenu(m) => format!("[{}]", m.name),
+                        gpui_kit::OwnedMenuItem::Separator => "—".into(),
+                        gpui_kit::OwnedMenuItem::Submenu(m) => format!("{} ▸", m.name),
+                    })
+                    .collect();
+                eprintln!("menu {}: {}", m.name, items.join(" | "));
+            }
+        }
         // The inputs and other components follow the window's dark palette, not the system's light one.
         gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
         // Snapshot builds can open at another size (MDB_WINDOW=900x700), to check the layout narrow.
@@ -92,10 +117,23 @@ fn main() {
             ..options
         };
         gpui_kit::open_window(options, cx, |window, cx| {
+            #[cfg(windows)]
+            menus::windows_menu::attach(window);
             let machine = cx.new(|cx| view::Machine::new(rx, window, cx));
             cx.new(|cx| shell::Shell::new(machine, grx, update::start(), window, cx))
         })
         .expect("a window");
+        // Not forwarded: nothing was open, so this one does it once its window is there.
+        if let Some(n) = dock_action {
+            cx.perform_dock_menu_action(n);
+        }
+        // Snapshot builds: MDB_ACTION=check|about runs that menu item.
+        #[cfg(feature = "snapshot")]
+        match std::env::var("MDB_ACTION").as_deref() {
+            Ok("check") => cx.dispatch_action(&menus::CheckForUpdates),
+            Ok("about") => cx.dispatch_action(&menus::About),
+            _ => {}
+        }
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();

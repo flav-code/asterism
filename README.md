@@ -35,7 +35,9 @@ scoop install flav-code/asterism
 
 Or download it from [Releases](https://github.com/flav-code/asterism/releases): a `.dmg` for Apple silicon or Intel
 Macs, an installer for Windows. Asterism updates itself: when a newer version is out, a green arrow shows at the top
-right; click it to restart on the new version. Installed with Scoop, it leaves updates to `scoop update`.
+right; click it to restart on the new version. Installed with Scoop, it leaves updates to `scoop update`. To check
+right away: Check for Updates… in the Asterism menu of the menu bar or the Dock icon's menu on macOS, and on Windows
+in the window's own menu (its icon in the title bar, or Alt+Space) or the taskbar icon's menu.
 
 The builds are not signed yet. On macOS, the first time you open it, macOS blocks it: go to System Settings → Privacy
 & Security and click Open Anyway. On Windows, SmartScreen asks once: More info → Run anyway.

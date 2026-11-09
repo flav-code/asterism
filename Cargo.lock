@@ -298,6 +298,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-platform",
  "iana-time-zone",
+ "raw-window-handle",
  "rust-i18n",
  "serde_json",
  "sha2 0.10.9",
@@ -305,6 +306,7 @@ dependencies = [
  "sysinfo 0.40.1",
  "tokio",
  "ureq",
+ "windows 0.62.2",
 ]
 
 [[package]]

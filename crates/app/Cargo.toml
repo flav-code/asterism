@@ -25,6 +25,11 @@ sys-locale = "0.3.2"
 # Other machines get this time zone, so their days and hours are this computer's (chrono already builds with it).
 iana-time-zone = "0.1.65"
 
+# The window's own menu on Windows (its icon in the title bar): the same versions and parts as GPUI's.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+raw-window-handle = "0.6.2"
+
 # The logo in the Windows exe (GPUI already builds with it, so it adds nothing to the tree).
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3.0.12"
