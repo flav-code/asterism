@@ -2,7 +2,7 @@
 //! the biggest reply. A reply spans several transcript lines and forks copy history, so everything is counted
 //! once per message id (and tool calls once per tool_use id).
 use chrono::{Local, TimeZone, Timelike};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -61,7 +61,7 @@ pub fn cost(model: &str, u: &Value) -> Option<f64> {
     Some(k * (i * input + o * output + cr * read + (cw - cw1h) * input * 1.25 + cw1h * input * 2.0) / 1e6)
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Totals {
     pub i: u64,
     pub o: u64,
@@ -92,7 +92,7 @@ pub struct FileTotals {
     pub slug: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Biggest {
     pub o: u64,
     pub ts: u64,

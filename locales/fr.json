@@ -174,6 +174,42 @@
     "not_priced": "Sans prix : %{models}.",
     "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 6 oct. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
   },
+  "machines": {
+    "button": "Machines",
+    "button_sub": "Les sessions de vos VM et serveurs aussi, par SSH",
+    "intro": "Les sessions d'autres machines (VM, serveurs) s'affichent ici aussi. Asterism s'y connecte avec ssh et vos clés, puis y copie un petit agent dans ~/.cache/asterism.",
+    "name": "Nom",
+    "target": "utilisateur@hôte ou alias ssh",
+    "add": "Ajouter",
+    "connecting": "Connexion…",
+    "installing": "Copie de l'agent…",
+    "sessions": {
+      "one": "%{n} session",
+      "other": "%{n} sessions"
+    },
+    "remove": "Retirer cette machine",
+    "confirm": "Retirer %{name} ? Ses sessions quittent la carte ; rien ne change sur la machine.",
+    "confirm_yes": "Retirer",
+    "cancel": "Annuler",
+    "check": {
+      "name": "Donnez-lui un nom",
+      "taken": "Une autre machine a déjà ce nom",
+      "target": "Entrez ce que vous tapez après ssh",
+      "not_target": "Pas une cible SSH : utilisateur@hôte, ou un Host de ~/.ssh/config"
+    },
+    "error": {
+      "closed": "La connexion s'est fermée",
+      "no_ssh": "ssh n'est pas installé sur cet ordinateur",
+      "os": "Seulement les machines Linux pour l'instant (celle-ci est sous %{os})",
+      "arch": "Pas d'agent pour ce processeur (%{arch})",
+      "install": "Impossible de copier l'agent : %{why}",
+      "download": "Impossible de télécharger l'agent : %{why}"
+    },
+    "hint": {
+      "host_key": "connectez-vous une fois depuis un terminal (ssh %{target}) pour accepter sa clé",
+      "permission": "ajoutez-y votre clé SSH (ssh-copy-id %{target})"
+    }
+  },
   "map": {
     "loading": "Lecture des sessions…",
     "titles": {
@@ -236,6 +272,7 @@
       "last_active": "Dernière activité",
       "turns": "Tours",
       "tokens": "Jetons",
+      "machine": "Machine",
       "process": "Processus",
       "parent": "Parent",
       "pull_requests": "Pull requests"

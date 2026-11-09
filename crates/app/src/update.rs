@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::watch;
 
-const REPO: &str = "flav-code/asterism";
+pub const REPO: &str = "flav-code/asterism";
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// After launch, the first check waits a little: the history is being read then.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
@@ -88,7 +88,7 @@ pub fn start() -> watch::Receiver<State> {
     rx
 }
 
-fn agent() -> ureq::Agent {
+pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(600))).build().into()
 }
 

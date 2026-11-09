@@ -5,11 +5,12 @@ use crate::sessions::project_of;
 use crate::transcripts::{Move, Transcripts};
 use crate::usage::{Biggest, PRICES, Totals, Usage, family, model_id};
 use rust_i18n::t;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 /// Before the full scan is done, transcripts of sessions idle for longer than this are not read.
@@ -20,7 +21,7 @@ const SCAN_DAYS: u64 = 14;
 const FIRST_READ: u64 = 8 << 20;
 const READ_BUDGET: u64 = 96 << 20;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeKind {
     Desktop,
@@ -32,7 +33,7 @@ pub enum NodeKind {
     Remote,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrView {
     pub n: u64,
     pub url: String,
@@ -40,7 +41,7 @@ pub struct PrView {
     pub repo: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Tok {
     pub o: u64,
     pub t: u64,
@@ -56,7 +57,7 @@ impl Tok {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub kind: NodeKind,
@@ -83,9 +84,12 @@ pub struct Node {
     pub now: Option<Move>,
     pub tok: Option<Tok>,
     pub pid: Option<u32>,
+    /// The machine it runs on, as named in the settings; empty for this computer.
+    #[serde(default)]
+    pub machine: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeKind {
     Spawn,
@@ -93,7 +97,7 @@ pub enum EdgeKind {
     Agent,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Edge {
     pub from: String,
     pub to: String,
@@ -101,7 +105,7 @@ pub struct Edge {
     pub at: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MsgKind {
     Message,
@@ -109,7 +113,7 @@ pub enum MsgKind {
     Report,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Msg {
     pub id: String,
     pub from: String,
@@ -122,7 +126,7 @@ pub struct Msg {
     pub kind: MsgKind,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Graph {
     pub at: u64,
     pub nodes: Vec<Node>,
@@ -130,25 +134,27 @@ pub struct Graph {
     pub messages: Vec<Msg>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DayRow {
     pub d: String,
     pub model: String,
-    pub fam: &'static str,
+    #[serde(deserialize_with = "fam_of")]
+    pub fam: Family,
     pub agent: bool,
     pub t: Totals,
     /// What the cache reads would have cost as plain input.
     pub saved: f64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HourRow {
     pub h: String,
-    pub fam: &'static str,
+    #[serde(deserialize_with = "fam_of")]
+    pub fam: Family,
     pub t: Totals,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionUsage {
     pub id: String,
     pub title: String,
@@ -158,7 +164,7 @@ pub struct SessionUsage {
     pub days: BTreeMap<String, [f64; 4]>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UsageView {
     /// Every transcript has been read once.
     pub ready: bool,
@@ -176,6 +182,15 @@ pub struct UsageView {
     pub sessions: Vec<SessionUsage>,
     pub tools: Vec<(String, u64)>,
     pub unpriced: Vec<(String, u64)>,
+}
+
+/// A model family's name. An alias, not `&'static str` written out: serde would then want to borrow it from the JSON.
+pub type Family = &'static str;
+
+/// A model family read back from JSON, as one of the names `family` gives.
+fn fam_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(["Fable", "Opus", "Sonnet", "Haiku"].into_iter().find(|f| *f == s).unwrap_or("Other"))
 }
 
 /// `to` shapes: `local_<uuid>`, `uds:<socket>`, `bridge:<id>`, `a<16 hex>` (a subagent), `<title>` or `<title> [hex6]`.
@@ -299,6 +314,7 @@ fn subagents(transcript: &Path) -> Vec<Subagent> {
 
 fn node(id: &str, kind: NodeKind, title: &str, project: &str) -> Node {
     Node {
+        machine: String::new(),
         id: id.into(),
         kind,
         title: title.into(),
@@ -703,6 +719,88 @@ impl Visualizer {
     }
 }
 
+/// Builds the map again and again from the files under `home`: in quick steps while the history is first read, then
+/// every 2 s. `send` gets each map with the latest usage, and returns false to stop.
+pub fn follow(home: &Path, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> bool) {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let (mut store, mut viz) = (crate::desktop::DesktopStore::default(), Visualizer::default());
+    let mut sys = System::new().expect("sysinfo supports this OS");
+    let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
+    loop {
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+        let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
+        let desktop = store.refresh(home);
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let graph = viz.build(home, &desktop, &live, now);
+        if viz.usage.version != usage_version {
+            (usage, usage_version) = (Arc::new(viz.usage_view()), viz.usage.version);
+        }
+        if !send(Arc::new(graph), usage.clone()) {
+            break;
+        }
+        std::thread::sleep(if usage.ready { std::time::Duration::from_secs(2) } else { std::time::Duration::from_millis(16) });
+    }
+}
+
+/// This computer's map with those of other machines, each named: their sessions carry the machine's name. A session
+/// already on the map stays once (the same machine added twice, or this one).
+pub fn merge_graphs(local: &Graph, others: &[(&str, &Graph)]) -> Graph {
+    let mut g = local.clone();
+    let mut ids: HashSet<String> = g.nodes.iter().map(|n| n.id.clone()).collect();
+    let mut msg_ids: HashSet<String> = g.messages.iter().map(|m| m.id.clone()).collect();
+    for &(name, og) in others {
+        // Sessions named only by a message get their id from that name: two machines can use the same one.
+        let id = |id: &str| id.strip_prefix("ghost:").map_or_else(|| id.to_string(), |rest| format!("ghost:{name}/{rest}"));
+        let added: HashSet<String> = og.nodes.iter().map(|n| id(&n.id)).filter(|i| !ids.contains(i)).collect();
+        for n in og.nodes.iter().filter(|n| added.contains(&id(&n.id))) {
+            g.nodes.push(Node { id: id(&n.id), parent: n.parent.as_deref().map(id), machine: name.to_string(), ..n.clone() });
+        }
+        g.edges.extend(og.edges.iter().filter(|e| added.contains(&id(&e.to))).map(|e| Edge {
+            from: id(&e.from),
+            to: id(&e.to),
+            ..e.clone()
+        }));
+        for m in og.messages.iter().filter(|m| msg_ids.insert(m.id.clone())) {
+            g.messages.push(Msg { from: id(&m.from), to: id(&m.to), ..m.clone() });
+        }
+        ids.extend(added);
+    }
+    g.messages.sort_by_key(|m| m.ts);
+    g
+}
+
+/// This computer's token usage with that of other machines.
+pub fn merge_usage(local: &UsageView, others: &[&UsageView]) -> UsageView {
+    let mut u = local.clone();
+    for &ou in others {
+        (u.ready, u.scanned, u.total) = (u.ready && ou.ready, u.scanned + ou.scanned, u.total + ou.total);
+        (u.read_bytes, u.total_bytes) = (u.read_bytes + ou.read_bytes, u.total_bytes + ou.total_bytes);
+        u.first = [u.first, ou.first].into_iter().filter(|&f| f > 0).min().unwrap_or(0);
+        if ou.biggest.as_ref().is_some_and(|b| u.biggest.as_ref().is_none_or(|a| b.o > a.o)) {
+            u.biggest = ou.biggest.clone();
+        }
+        // Days and hours are summed by whoever reads them; minutes, tools and models are looked up by key.
+        u.days.extend(ou.days.iter().cloned());
+        u.hours.extend(ou.hours.iter().cloned());
+        let seen: HashSet<String> = u.sessions.iter().map(|s| s.id.clone()).collect();
+        u.sessions.extend(ou.sessions.iter().filter(|s| !seen.contains(&s.id)).cloned());
+        let mut minutes: BTreeMap<u64, Totals> = u.minutes.drain(..).collect();
+        for (m, t) in &ou.minutes {
+            minutes.entry(*m).or_default().add(t);
+        }
+        u.minutes = minutes.into_iter().collect();
+        for (list, more) in [(&mut u.tools, &ou.tools), (&mut u.unpriced, &ou.unpriced)] {
+            let mut by: HashMap<String, u64> = list.drain(..).collect();
+            for (k, v) in more {
+                *by.entry(k.clone()).or_default() += v;
+            }
+            *list = by.into_iter().collect();
+            list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        }
+    }
+    u
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,5 +817,57 @@ mod tests {
         assert_eq!(r("Refonte page [81b0b4]").as_deref(), Some("local_b"));
         assert_eq!(r("Refonte Page").as_deref(), Some("local_b"));
         assert_eq!(r("nobody"), None);
+    }
+
+    #[test]
+    fn merges_machines() {
+        let msg = |id: &str, from: &str, to: &str, ts: u64| Msg {
+            id: id.into(),
+            from: from.into(),
+            to: to.into(),
+            ts,
+            summary: String::new(),
+            text: String::new(),
+            ok: None,
+            note: String::new(),
+            kind: MsgKind::Message,
+        };
+        let tot = |o: u64| Totals { o, ..Totals::default() };
+        let local = Graph {
+            nodes: vec![node("cli:a", NodeKind::Cli, "A", "p"), node("ghost:x", NodeKind::Ghost, "X", "remote")],
+            messages: vec![msg("m1", "cli:a", "ghost:x", 10)],
+            ..Graph::default()
+        };
+        let lu = UsageView {
+            minutes: vec![(60_000, tot(1))],
+            tools: vec![("Bash".into(), 3), ("Read".into(), 2)],
+            first: 50,
+            ..UsageView::default()
+        };
+        let mut b = node("cli:b", NodeKind::Cli, "B", "p");
+        b.parent = Some("ghost:x".into());
+        let remote = Graph {
+            // The same session on both (this computer added as a machine), one of its own, and a namesake.
+            nodes: vec![node("cli:a", NodeKind::Cli, "A", "p"), b, node("ghost:x", NodeKind::Ghost, "X", "remote")],
+            edges: vec![Edge { from: "ghost:x".into(), to: "cli:b".into(), kind: EdgeKind::Spawn, at: 1 }],
+            messages: vec![msg("m1", "cli:a", "ghost:x", 10), msg("m2", "cli:b", "ghost:x", 5)],
+            ..Graph::default()
+        };
+        let ru = UsageView {
+            minutes: vec![(60_000, tot(4)), (120_000, tot(2))],
+            tools: vec![("Read".into(), 5)],
+            first: 20,
+            ..UsageView::default()
+        };
+        let (g, u) = (merge_graphs(&local, &[("vps", &remote)]), merge_usage(&lu, &[&ru]));
+        let ids: Vec<(&str, &str)> = g.nodes.iter().map(|n| (n.id.as_str(), n.machine.as_str())).collect();
+        assert_eq!(ids, [("cli:a", ""), ("ghost:x", ""), ("cli:b", "vps"), ("ghost:vps/x", "vps")]);
+        assert_eq!(g.nodes[2].parent.as_deref(), Some("ghost:vps/x"));
+        assert_eq!((g.edges[0].from.as_str(), g.edges[0].to.as_str()), ("ghost:vps/x", "cli:b"));
+        let msgs: Vec<(&str, &str)> = g.messages.iter().map(|m| (m.id.as_str(), m.to.as_str())).collect();
+        assert_eq!(msgs, [("m2", "ghost:vps/x"), ("m1", "ghost:x")]);
+        assert_eq!(u.minutes.iter().map(|(m, t)| (*m, t.o)).collect::<Vec<_>>(), [(60_000, 5), (120_000, 2)]);
+        assert_eq!(u.tools, [("Read".to_string(), 7), ("Bash".to_string(), 3)]);
+        assert_eq!(u.first, 20);
     }
 }

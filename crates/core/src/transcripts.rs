@@ -1,7 +1,7 @@
 //! Transcripts, read as they grow: the messages sessions send each other (SendMessage and its result), each
 //! session's latest move, its custom title and its token usage. Each file is read from where the last read stopped.
 use crate::usage::{FileTotals, Usage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -23,7 +23,7 @@ pub struct Sent {
 }
 
 /// The session's latest move: its last tool call, or "reply" for a text answer.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Move {
     pub tool: String,
     pub detail: String,

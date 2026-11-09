@@ -1,6 +1,6 @@
 //! The app: one window with the session map, the timeline, token usage and what runs on the machine.
 //! Two threads gather the data (the machine every 2 s; sessions, messages and usage from the files Claude Code
-//! keeps); the window only ever reads their latest result.
+//! keeps, with those of other machines over SSH); the window only ever reads their latest result.
 // Windows: a GUI app, or Windows opens an empty console next to the window (and closing it quits the app).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 mod dash;
@@ -9,6 +9,7 @@ mod demo;
 mod glide;
 mod icons;
 mod layout;
+mod machines;
 mod map;
 mod panel;
 mod seg;
@@ -22,14 +23,10 @@ mod view;
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
-use asterism_core::desktop::DesktopStore;
-use asterism_core::graph::{UsageView, Visualizer};
 use asterism_core::{Monitor, Report};
 use gpui_kit::*;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
@@ -60,23 +57,7 @@ fn main() {
         .spawn(move || {
             #[allow(deprecated)]
             let home = std::env::home_dir().unwrap_or_default();
-            let (mut store, mut viz) = (DesktopStore::default(), Visualizer::default());
-            let mut sys = System::new().expect("sysinfo supports this OS");
-            let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
-            loop {
-                sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
-                let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
-                let desktop = store.refresh(&home);
-                let graph = viz.build(&home, &desktop, &live, ui::now_ms());
-                if viz.usage.version != usage_version {
-                    (usage, usage_version) = (Arc::new(viz.usage_view()), viz.usage.version);
-                }
-                if gtx.send(Some((Arc::new(graph), usage.clone()))).is_err() {
-                    break;
-                }
-                // The history is read in steps right after launch, then the files are checked every 2 s.
-                std::thread::sleep(if usage.ready { SAMPLE_EVERY } else { Duration::from_millis(16) });
-            }
+            asterism_core::graph::follow(&home, |graph, usage| gtx.send(Some(machines::merged(graph, usage))).is_ok());
         })
         .expect("the sessions thread");
 

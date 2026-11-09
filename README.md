@@ -47,6 +47,20 @@ choice is kept. The texts live in `locales/`, one JSON file per language (`en.js
 `en.json` to `<code>.json`, translate the values (keep each `%{…}` as it is), and add the code to `LANGUAGES` in
 `crates/core/src/i18n.rs`; `cargo test -p asterism-core i18n` checks that no key is missing.
 
+## Other machines
+
+Sessions on your VMs, VPSs and dedicated servers show on the map too, next to this computer's. Add one with the
+server button at the top right: a name, and what you type after `ssh` to reach it (`me@host`, or a `Host` from
+`~/.ssh/config`).
+
+- Asterism runs the system's `ssh`, so your keys, `~/.ssh/config` and SSH agent apply. It never asks for a password:
+  the machine must accept your key, and its host key must be known (connect once from a terminal to accept it).
+- The first time, and after each update, it copies a small agent to `~/.cache/asterism` there (`asterism-cli serve`,
+  Linux x64 or arm64, from this version's release, checked against its SHA-256). The agent reads that machine's
+  `~/.claude` and sends back only the result; it stops when the connection does. Nothing else changes there.
+- Its open sessions get the machine's name (in the panel, the list of open sessions and the map's tooltips), and
+  its token usage counts in the Usage tab. The Machine tab still shows this computer only.
+
 ## Try it
 
 ```sh
@@ -89,14 +103,15 @@ It shows:
 ## Privacy
 
 Everything stays on the machine. The one request that leaves it: now and then, the installed app asks GitHub for
-the latest Asterism release, to offer an update (`ASTERISM_NO_UPDATES=1` turns that off). It never reads process environments, masks anything in a command line that looks
+the latest Asterism release, to offer an update (`ASTERISM_NO_UPDATES=1` turns that off). Other machines you add
+are reached over SSH, and only what their agent reads comes back. It never reads process environments, masks anything in a command line that looks
 like a secret (tokens, keys, passwords, `Authorization` headers, credentials in URLs), shows your home folder as
 `~`, and changes nothing.
 
 ## Layout
 
 - `crates/core`: the detection, with no UI dependency. Tests run on recorded data (`tests/fixtures`).
-- `crates/cli`: the `asterism-cli` command.
+- `crates/cli`: the `asterism-cli` command, and the agent other machines run (`serve`).
 - `locales`: the app's texts, one JSON file per language.
 - `crates/app`: the app (tabs Map, Timeline, Usage, Machine), built with [GPUI](https://www.gpui.rs) and [gpui-component](https://github.com/longbridge/gpui-kit).
   Sampling runs on its own thread; the window only reads the latest report.

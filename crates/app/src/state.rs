@@ -160,7 +160,7 @@ pub fn node_tip(n: &Node, pos: Point<Pixels>, now: u64) -> Div {
         .child(div().text_size(px(12.0)).text_color(muted()).child(format!(
             "{kind}{} · {} · {}",
             state_of(n),
-            n.project,
+            if n.machine.is_empty() { n.project.clone() } else { format!("{} · {}", n.project, n.machine) },
             t!("ui.ago", time = ago(ago_s))
         )))
         .children(n.now.as_ref().filter(|_| working(n)).map(|m| {

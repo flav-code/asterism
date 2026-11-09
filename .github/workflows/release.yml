@@ -91,8 +91,41 @@ jobs:
           name: windows
           path: dist/*.exe
 
+  # The agent the app copies over SSH to other machines (VMs, servers): static, so any Linux runs it.
+  agents:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, arch: x64, runner: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p asterism-cli --target ${{ matrix.target }}
+      - name: The agent starts and says its version
+        run: |
+          v=${{ needs.check.outputs.version }}
+          mkdir -p dist home/.claude/projects
+          out=dist/asterism-agent-$v-linux-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/asterism-cli "$out"
+          file "$out" | grep -q 'statically linked'
+          first=$( (sleep 3) | HOME=$PWD/home "$out" serve | head -1)
+          echo "$first"
+          [ "$first" = "{\"asterism\":\"$v\"}" ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.arch }}
+          path: dist/*
+
   publish:
-    needs: [check, macos, windows]
+    needs: [check, macos, windows, agents]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
@@ -105,6 +138,11 @@ jobs:
         with:
           name: windows
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: dist
+          merge-multiple: true
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,6 +163,9 @@ jobs:
           shows "Windows protected your PC", choose More info, then Run anyway. Or, with Scoop:
           \`scoop bucket add flav-code https://github.com/flav-code/scoop-bucket\`, then \`scoop install flav-code/asterism\`.
           Windows support is new: please open an issue if something looks wrong.
+
+          **Other machines:** sessions on your VMs and servers show too (the server button at the top right). Asterism
+          reaches them with \`ssh\` and copies its agent there itself: \`asterism-agent-$v-linux-*\` (Linux, x64 and arm64).
 
           **Updates:** Asterism checks for new versions on its own. When one is ready, a green arrow shows at the top
           right of the window: click it to restart on the new version.

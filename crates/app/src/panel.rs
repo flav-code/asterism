@@ -199,7 +199,12 @@ impl Panel {
                         .child(div().min_w_0().child(clip(&m.detail, 90))),
                     None => div().child(n.project.clone()),
                 };
-                item(&n.id, self.dot(n, 10.0), n.title.clone(), ago(now.saturating_sub(when) / 1000), Some(sum.into_any_element()), cx)
+                // On another machine: its name before the time.
+                let mut right = ago(now.saturating_sub(when) / 1000);
+                if !n.machine.is_empty() {
+                    right = format!("{} · {right}", clip(&n.machine, 14));
+                }
+                item(&n.id, self.dot(n, 10.0), n.title.clone(), right, Some(sum.into_any_element()), cx)
             })
             .collect::<Vec<_>>();
         let talkers = talk
@@ -287,6 +292,9 @@ impl Panel {
             let (total, output, cost) = (crate::dash::short(t.t as f64), crate::dash::short(t.o as f64), crate::dash::usd(t.usd));
             let value = t!("panel.tokens_value", total = total, output = output, cost = cost).to_string();
             kv.push((t!("panel.field.tokens").to_string(), text_el(value)));
+        }
+        if !n.machine.is_empty() {
+            kv.push((t!("panel.field.machine").to_string(), text_el(n.machine.clone())));
         }
         if let Some(pid) = n.pid {
             kv.push((t!("panel.field.process").to_string(), text_el(format!("pid {pid}"))));

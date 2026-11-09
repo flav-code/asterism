@@ -22,6 +22,8 @@ sha2 = "0.10.9"
 # The texts in locales/*.json (gpui-component already builds with it), and the system language.
 rust-i18n = "4.2.4"
 sys-locale = "0.3.2"
+# Other machines get this time zone, so their days and hours are this computer's (chrono already builds with it).
+iana-time-zone = "0.1.65"
 
 # The logo in the Windows exe (GPUI already builds with it, so it adds nothing to the tree).
 [target.'cfg(windows)'.build-dependencies]

@@ -6,6 +6,7 @@ pub mod docker;
 pub mod graph;
 pub mod host;
 pub mod i18n;
+pub mod remote;
 pub mod sessions;
 pub mod text;
 pub mod transcripts;

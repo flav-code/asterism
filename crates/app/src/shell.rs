@@ -146,6 +146,14 @@ pub struct Shell {
     feed_last: Instant,
     project_menu: bool,
     language_menu: bool,
+    machines_menu: bool,
+    /// The machines menu's form, and the machine whose removal waits for a yes.
+    machine_name: Entity<InputState>,
+    machine_target: Entity<InputState>,
+    machine_remove: Option<String>,
+    /// The menu a press outside it just closed: when that press was on its own button, the click must not open it
+    /// again.
+    menu_closed: Option<(&'static str, Instant)>,
     menu_opens: u32,
     menu_scroll: crate::glide::Glide,
     tab_seg: crate::seg::Seg,
@@ -173,6 +181,8 @@ impl Shell {
         let dash = cx.new(DashView::new);
         let panel = cx.new(Panel::new);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("shell.search").to_string()));
+        let machine_name = cx.new(|cx| InputState::new(window, cx).placeholder(t!("machines.name").to_string()));
+        let machine_target = cx.new(|cx| InputState::new(window, cx).placeholder(t!("machines.target").to_string()));
         let subs = vec![
             // One selection for the map, the timeline and the panel.
             cx.subscribe(&map, |s, map, e: &MapEvent, cx| match e {
@@ -197,6 +207,9 @@ impl Shell {
                     s.push(cx);
                 }
             }),
+            // The form's Add button follows what is typed; Enter adds.
+            cx.subscribe_in(&machine_name, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
+            cx.subscribe_in(&machine_target, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
         ];
         let updates_task = cx.spawn(async move |this, cx| {
             while feed.changed().await.is_ok() {
@@ -270,6 +283,11 @@ impl Shell {
             feed_last: Instant::now(),
             project_menu: false,
             language_menu: false,
+            machines_menu: false,
+            machine_name,
+            machine_target,
+            machine_remove: None,
+            menu_closed: None,
             menu_opens: 0,
             menu_scroll: crate::glide::Glide::default(),
             tab_seg: crate::seg::Seg::default(),
@@ -588,6 +606,7 @@ impl Shell {
                     .child(self.menu_scroll.driver())
                     .on_mouse_down_out(cx.listener(|s, _, _, cx| {
                         s.project_menu = false;
+                        s.menu_closed = Some(("project", Instant::now()));
                         cx.notify();
                     }))
                     .with_animation(
@@ -606,7 +625,7 @@ impl Shell {
                     .child(div().overflow_hidden().child(clip(current.as_deref().unwrap_or(&t!("shell.all_projects")), 16)))
                     .child(div().text_color(muted()).child("▾"))
                     .on_click(cx.listener(|s, _, _, cx| {
-                        s.project_menu = !s.project_menu;
+                        s.project_menu = !s.project_menu && s.reopens("project");
                         s.menu_opens += 1;
                         cx.notify();
                     })),
@@ -679,14 +698,15 @@ impl Shell {
             .child(div().relative().self_stretch().w(px(0.0)).children(self.loader()))
             .child(div().flex_1());
         let language = self.language_button(cx);
+        let machines = self.machines_button(cx);
         let bar = div().px(px(16.0)).py(px(10.0)).border_b_1().border_color(line());
         if one_row {
-            bar.child(first.children(controls).children(update).child(language))
+            bar.child(first.children(controls).children(update).child(machines).child(language))
         } else {
             bar.flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(first.children(update).child(language))
+                .child(first.children(update).child(machines).child(language))
                 .child(div().flex().flex_wrap().items_center().gap(px(8.0)).children(controls))
         }
     }
@@ -786,6 +806,284 @@ impl Shell {
         )
     }
 
+    /// Whether a click on `menu`'s button may open it: not when that same press just closed it.
+    fn reopens(&self, menu: &str) -> bool {
+        !self.menu_closed.is_some_and(|(m, at)| m == menu && at.elapsed() < Duration::from_millis(400))
+    }
+
+    /// Why the machine typed in the form can't be added yet (None: it can).
+    fn machine_invalid(&self, cx: &App) -> Option<String> {
+        let (name, target) = (self.machine_name.read(cx).value(), self.machine_target.read(cx).value());
+        crate::machines::check(&name, &target, &cx.global::<Settings>().machines).err()
+    }
+
+    fn machine_form(&mut self, e: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match e {
+            InputEvent::PressEnter { .. } => self.add_machine(window, cx),
+            InputEvent::Change => cx.notify(),
+            _ => {}
+        }
+    }
+
+    fn add_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.machine_invalid(cx).is_some() {
+            return;
+        }
+        let name = self.machine_name.read(cx).value().trim().to_string();
+        let target = self.machine_target.read(cx).value().trim().to_string();
+        let mut list = cx.global::<Settings>().machines.clone();
+        list.push(settings::Machine { name, target });
+        settings::set_machines(cx, list);
+        for input in [&self.machine_name, &self.machine_target] {
+            input.update(cx, |i, cx| i.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Other machines, at the top right: a dot for how they are (green: all connected, amber: on the way, red: one
+    /// failed); its menu lists them with what each says, adds one, and removes one after a yes.
+    fn machines_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::machines::Status;
+        let machines = cx.global::<Settings>().machines.clone();
+        let states: Vec<(Status, usize)> =
+            machines.iter().map(|m| crate::machines::status(&m.name).unwrap_or((Status::Connecting, 0))).collect();
+        let color_of = |s: &Status| match s {
+            Status::Connected => green(),
+            Status::Failed(_) => red(),
+            _ => amber(),
+        };
+        let dot = if states.iter().any(|s| matches!(s.0, Status::Failed(_))) {
+            Some(red())
+        } else if states.iter().any(|s| s.0 != Status::Connected) {
+            Some(amber())
+        } else {
+            (!states.is_empty()).then(green)
+        };
+        let menu = self.machines_menu.then(|| {
+            let rows = machines.iter().zip(&states).map(|(m, (status, sessions))| {
+                let name = m.name.clone();
+                let confirming = self.machine_remove.as_deref() == Some(m.name.as_str());
+                let said = match status {
+                    Status::Connecting => t!("machines.connecting").into_owned(),
+                    Status::Installing => t!("machines.installing").into_owned(),
+                    Status::Connected => i18n::count("machines.sessions", *sessions as u64),
+                    Status::Failed(e) => e.clone(),
+                };
+                let failed = matches!(status, Status::Failed(_));
+                let small = |id: String, label: String, strong: bool| {
+                    div()
+                        .id(SharedString::from(id))
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded(px(6.0))
+                        .cursor_pointer()
+                        .text_size(px(12.0))
+                        .text_color(if strong { red() } else { muted() })
+                        .border_1()
+                        .border_color(if strong { rgba(0xf8717159) } else { line() })
+                        .hover(|s| s.bg(panel_hi()))
+                        .child(label)
+                };
+                div()
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(div().size(px(8.0)).flex_none().rounded_full().bg(color_of(status)))
+                            .child(div().flex_1().text_size(px(13.0)).text_color(text()).child(m.name.clone()))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("machine-remove-{}", m.name)))
+                                    .px(px(6.0))
+                                    .rounded(px(6.0))
+                                    .cursor_pointer()
+                                    .text_size(px(13.0))
+                                    .text_color(faint())
+                                    .hover(|s| s.text_color(text()).bg(panel_hi()))
+                                    .child("✕")
+                                    .tooltip(|_, cx| cx.new(|_| Tip(t!("machines.remove").into_owned(), String::new())).into())
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        s.machine_remove = Some(name.clone());
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(div().pl(px(16.0)).font_family(MONO).text_size(px(11.0)).text_color(faint()).child(m.target.clone()))
+                    .child(
+                        div()
+                            .pl(px(16.0))
+                            .text_size(px(12.0))
+                            .line_height(px(16.0))
+                            .text_color(if failed { red() } else { muted() })
+                            .child(said),
+                    )
+                    .when(confirming, |d| {
+                        let name = m.name.clone();
+                        d.child(
+                            div()
+                                .mt(px(4.0))
+                                .ml(px(16.0))
+                                .p(px(8.0))
+                                .rounded(px(8.0))
+                                .bg(rgba(0xf871711a))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .child(
+                                    div().text_size(px(12.0)).text_color(text()).child(t!("machines.confirm", name = m.name).into_owned()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(6.0))
+                                        .child(
+                                            small(format!("machine-yes-{}", m.name), t!("machines.confirm_yes").into_owned(), true)
+                                                .on_click(cx.listener(move |s, _, _, cx| {
+                                                    let list = cx
+                                                        .global::<Settings>()
+                                                        .machines
+                                                        .iter()
+                                                        .filter(|m| m.name != name)
+                                                        .cloned()
+                                                        .collect();
+                                                    settings::set_machines(cx, list);
+                                                    s.machine_remove = None;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            small(format!("machine-no-{}", m.name), t!("machines.cancel").into_owned(), false).on_click(
+                                                cx.listener(|s, _, _, cx| {
+                                                    s.machine_remove = None;
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                        ),
+                                ),
+                        )
+                    })
+            });
+            let invalid = self.machine_invalid(cx);
+            let typed = !self.machine_name.read(cx).value().is_empty() || !self.machine_target.read(cx).value().is_empty();
+            let add = div()
+                .id("machine-add")
+                .flex_none()
+                .px(px(12.0))
+                .h(px(30.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .text_size(px(12.0))
+                .border_1()
+                .border_color(if invalid.is_none() { rgba(0x38bdf866) } else { line() })
+                .text_color(if invalid.is_none() { blue() } else { faint() })
+                .when(invalid.is_none(), |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
+                .child(t!("machines.add").into_owned())
+                // A grey button says why it is grey.
+                .when_some(invalid.clone(), |d, why| d.tooltip(move |_, cx| cx.new(|_| Tip(why.clone(), String::new())).into()))
+                .on_click(cx.listener(|s, _, window, cx| s.add_machine(window, cx)));
+            deferred(
+                div()
+                    .id("machines-menu")
+                    .absolute()
+                    .top(px(34.0))
+                    .right_0()
+                    .w(px(340.0))
+                    .occlude()
+                    .p(px(6.0))
+                    .rounded(px(10.0))
+                    .bg(panel())
+                    .border_1()
+                    .border_color(rgba(0xffffff1f))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .px(px(10.0))
+                            .pt(px(6.0))
+                            .pb(px(8.0))
+                            .text_size(px(12.0))
+                            .line_height(px(17.0))
+                            .text_color(muted())
+                            .child(t!("machines.intro").into_owned()),
+                    )
+                    .children(rows)
+                    .child(
+                        div()
+                            .mt(px(4.0))
+                            .p(px(8.0))
+                            .border_t_1()
+                            .border_color(line())
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .child(Input::new(&self.machine_name))
+                            .child(div().flex().gap(px(6.0)).child(div().flex_1().child(Input::new(&self.machine_target))).child(add))
+                            // Typed but not addable: why, under the form, until it is fixed.
+                            .when_some(invalid.filter(|_| typed), |d, why| {
+                                d.child(div().text_size(px(11.0)).text_color(faint()).child(why))
+                            }),
+                    )
+                    .on_mouse_down_out(cx.listener(|s, _, _, cx| {
+                        s.machines_menu = false;
+                        s.machine_remove = None;
+                        s.menu_closed = Some(("machines", Instant::now()));
+                        cx.notify();
+                    }))
+                    .with_animation(
+                        SharedString::from(format!("machines-menu-{}", self.menu_opens)),
+                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
+                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                    ),
+            )
+            .with_priority(1)
+        });
+        let on = self.machines_menu;
+        div()
+            .relative()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id("machines")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(32.0))
+                    .h(px(30.0))
+                    .rounded(px(8.0))
+                    .bg(panel())
+                    .border_1()
+                    .border_color(if on { rgba(0x38bdf866) } else { line() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(panel_hi()))
+                    .child(crate::icons::line(gpui_kit::assets::IconName::Server, if on { blue() } else { muted() }, 15.0))
+                    .children(dot.map(|c| div().absolute().top(px(5.0)).right(px(5.0)).size(px(6.0)).rounded_full().bg(c)))
+                    .when(!on, |d| {
+                        d.tooltip(|_, cx| {
+                            cx.new(|_| Tip(t!("machines.button").into_owned(), t!("machines.button_sub").into_owned())).into()
+                        })
+                    })
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.machines_menu = !s.machines_menu && s.reopens("machines");
+                        s.machine_remove = None;
+                        s.menu_opens += 1;
+                        cx.notify();
+                    })),
+            )
+            .children(menu)
+            .into_any_element()
+    }
+
     /// The language, at the top right: the system's, or one picked in its menu (saved for the next launch).
     fn language_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = cx.global::<Settings>().language.clone();
@@ -807,6 +1105,8 @@ impl Shell {
                         settings::set_language(cx, pick.map(str::to_string));
                         // The search box keeps the text it was made with: give it this language's.
                         s.search.update(cx, |input, cx| input.set_placeholder(t!("shell.search").to_string(), window, cx));
+                        s.machine_name.update(cx, |input, cx| input.set_placeholder(t!("machines.name").to_string(), window, cx));
+                        s.machine_target.update(cx, |input, cx| input.set_placeholder(t!("machines.target").to_string(), window, cx));
                         cx.notify();
                     }))
             };
@@ -830,6 +1130,7 @@ impl Shell {
                     .children(rows)
                     .on_mouse_down_out(cx.listener(|s, _, _, cx| {
                         s.language_menu = false;
+                        s.menu_closed = Some(("language", Instant::now()));
                         cx.notify();
                     }))
                     .with_animation(
@@ -869,7 +1170,7 @@ impl Shell {
                         })
                     })
                     .on_click(cx.listener(|s, _, _, cx| {
-                        s.language_menu = !s.language_menu;
+                        s.language_menu = !s.language_menu && s.reopens("language");
                         s.menu_opens += 1;
                         cx.notify();
                     })),
@@ -1497,6 +1798,6 @@ impl Render for Tip {
             .text_size(px(12.0))
             .text_color(text())
             .child(div().font_weight(FontWeight::SEMIBOLD).child(self.0.clone()))
-            .child(div().text_color(muted()).child(self.1.clone()))
+            .when(!self.1.is_empty(), |d| d.child(div().text_color(muted()).child(self.1.clone())))
     }
 }

@@ -1,13 +1,19 @@
 //! `mdb top [--json]`: who uses the RAM and CPU right now, by agent session, Docker and app.
+//! `mdb serve [--lang <code>]`: the agent the app starts over SSH on another machine (see `serve`).
 use asterism_core::Monitor;
 use asterism_core::attribute::{OwnerKind, Report};
-use std::time::Duration;
+use std::io::Write;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("serve") {
+        serve(&args);
+    }
     if args.first().map(String::as_str) != Some("top") {
-        eprintln!("usage: mdb top [--json]");
+        eprintln!("usage: mdb top [--json] | mdb serve [--lang <code>]");
         std::process::exit(2);
     }
     // Two samples a second apart: CPU figures are the average over that second.
@@ -86,4 +92,49 @@ fn print_report(r: &Report) {
         let why = if g.shared > 0 { format!(", {} sessions work in its folders", g.shared) } else { String::new() };
         println!("  not attached: {} {} ({} containers, {}{why})", g.kind, g.name, g.containers.len(), gb(g.mem));
     }
+}
+
+/// The agent: this machine's session map and token usage for an app on another computer, read here so only the result
+/// travels: one JSON frame per line on stdout (see `asterism_core::remote`). It stops when its input closes, which is
+/// when the SSH connection is gone.
+fn serve(args: &[String]) -> ! {
+    use asterism_core::remote::{Frame, Sender};
+    if let Some(lang) = args.iter().position(|a| a == "--lang").and_then(|i| args.get(i + 1)) {
+        asterism_core::i18n::set(lang);
+    }
+    std::thread::spawn(|| {
+        std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).ok();
+        std::process::exit(0);
+    });
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut write = move |frames: &[Frame]| {
+        frames
+            .iter()
+            .try_for_each(|f| writeln!(out, "{}", serde_json::to_string(f).expect("frames always serialize")))
+            .and_then(|_| out.flush())
+            .is_ok()
+    };
+    if !write(&[Frame::Asterism(env!("CARGO_PKG_VERSION").into())]) {
+        std::process::exit(0);
+    }
+    #[allow(deprecated)] // fixed on every OS since Rust 1.85
+    let home = std::env::home_dir().unwrap_or_default();
+    let (mut sender, mut last_usage, mut sent) = (Sender::default(), std::ptr::null(), Instant::now() - Duration::from_secs(9));
+    asterism_core::graph::follow(&home, |graph, usage| {
+        // While the history is first read, the map changes at every step: once a second is enough.
+        if !usage.ready && sent.elapsed() < Duration::from_secs(1) {
+            return true;
+        }
+        let mut frames: Vec<Frame> = sender.map(&graph).into_iter().collect();
+        if Arc::as_ptr(&usage) != last_usage {
+            last_usage = Arc::as_ptr(&usage);
+            frames.extend(sender.usage(&usage));
+        }
+        if frames.is_empty() {
+            return true;
+        }
+        sent = Instant::now();
+        write(&frames)
+    });
+    std::process::exit(0);
 }

@@ -174,6 +174,42 @@
     "not_priced": "Not priced: %{models}.",
     "footer": "Value = what these tokens would cost on the Anthropic API (public prices of 6 Oct 2026: input, output, cache writes at 1.25× or 2×, cache reads). A subscription isn't billed this way; it shows how much work went through.%{unpriced}"
   },
+  "machines": {
+    "button": "Machines",
+    "button_sub": "Sessions on your VMs and servers too, over SSH",
+    "intro": "Sessions on other machines (VMs, servers) show here too. Asterism connects with ssh and your keys, then copies a small agent to ~/.cache/asterism there.",
+    "name": "Name",
+    "target": "user@host or ssh alias",
+    "add": "Add",
+    "connecting": "Connecting…",
+    "installing": "Copying the agent…",
+    "sessions": {
+      "one": "%{n} session",
+      "other": "%{n} sessions"
+    },
+    "remove": "Remove this machine",
+    "confirm": "Remove %{name}? Its sessions leave the map; nothing changes on the machine.",
+    "confirm_yes": "Remove",
+    "cancel": "Cancel",
+    "check": {
+      "name": "Give it a name",
+      "taken": "Another machine has this name",
+      "target": "Enter what you type after ssh",
+      "not_target": "Not an SSH target: user@host, or a Host from ~/.ssh/config"
+    },
+    "error": {
+      "closed": "The connection closed",
+      "no_ssh": "ssh isn't installed on this computer",
+      "os": "Only Linux machines for now (this one runs %{os})",
+      "arch": "No agent for this processor (%{arch})",
+      "install": "Couldn't copy the agent: %{why}",
+      "download": "Couldn't download the agent: %{why}"
+    },
+    "hint": {
+      "host_key": "connect once from a terminal (ssh %{target}) to accept its key",
+      "permission": "add your SSH key to it (ssh-copy-id %{target})"
+    }
+  },
   "map": {
     "loading": "Reading the sessions…",
     "titles": {
@@ -236,6 +272,7 @@
       "last_active": "Last active",
       "turns": "Turns",
       "tokens": "Tokens",
+      "machine": "Machine",
       "process": "Process",
       "parent": "Parent",
       "pull_requests": "Pull requests"
