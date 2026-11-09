@@ -1,6 +1,5 @@
 {
   "language": {
-    "button": "Language",
     "system": "System (%{name})"
   },
   "number": {
@@ -10,6 +9,17 @@
   "date": {
     "days_from_sunday": "Sun Mon Tue Wed Thu Fri Sat",
     "months": "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec"
+  },
+  "settings": {
+    "title": "Settings",
+    "button_sub": "Language, other machines, updates",
+    "language": "Language",
+    "language_sub": "Asterism follows your system's language unless you pick one.",
+    "machines": "Other machines",
+    "updates": "Updates",
+    "version": "Asterism %{version}",
+    "check": "Check for updates",
+    "checking": "Checking…"
   },
   "shell": {
     "search": "Search   /",
@@ -175,8 +185,6 @@
     "footer": "Value = what these tokens would cost on the Anthropic API (public prices of 6 Oct 2026: input, output, cache writes at 1.25× or 2×, cache reads). A subscription isn't billed this way; it shows how much work went through.%{unpriced}"
   },
   "machines": {
-    "button": "Machines",
-    "button_sub": "Sessions on your VMs and servers too, over SSH",
     "intro": "Sessions on other machines (VMs, servers) show here too. Asterism connects with ssh and your keys, then copies a small agent to ~/.cache/asterism there.",
     "name": "Name",
     "target": "user@host or ssh alias",
@@ -234,6 +242,7 @@
   "menu": {
     "about": "About Asterism",
     "about_detail": "Every AI coding agent session on your machine at once.",
+    "settings": "Settings…",
     "check": "Check for Updates…",
     "services": "Services",
     "hide": "Hide Asterism",

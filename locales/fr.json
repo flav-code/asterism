@@ -1,6 +1,5 @@
 {
   "language": {
-    "button": "Langue",
     "system": "Système (%{name})"
   },
   "number": {
@@ -10,6 +9,17 @@
   "date": {
     "days_from_sunday": "dim. lun. mar. mer. jeu. ven. sam.",
     "months": "janv. févr. mars avr. mai juin juil. août sept. oct. nov. déc."
+  },
+  "settings": {
+    "title": "Réglages",
+    "button_sub": "Langue, autres machines, mises à jour",
+    "language": "Langue",
+    "language_sub": "Asterism suit la langue de votre système, sauf si vous en choisissez une.",
+    "machines": "Autres machines",
+    "updates": "Mises à jour",
+    "version": "Asterism %{version}",
+    "check": "Rechercher des mises à jour",
+    "checking": "Vérification…"
   },
   "shell": {
     "search": "Rechercher   /",
@@ -175,8 +185,6 @@
     "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 6 oct. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
   },
   "machines": {
-    "button": "Machines",
-    "button_sub": "Les sessions de vos VM et serveurs aussi, par SSH",
     "intro": "Les sessions d'autres machines (VM, serveurs) s'affichent ici aussi. Asterism s'y connecte avec ssh et vos clés, puis y copie un petit agent dans ~/.cache/asterism.",
     "name": "Nom",
     "target": "utilisateur@hôte ou alias ssh",
@@ -234,6 +242,7 @@
   "menu": {
     "about": "À propos d'Asterism",
     "about_detail": "Toutes les sessions d'agents de code IA de votre machine, d'un coup d'œil.",
+    "settings": "Réglages…",
     "check": "Rechercher des mises à jour…",
     "services": "Services",
     "hide": "Masquer Asterism",

@@ -36,7 +36,7 @@ scoop install flav-code/asterism
 Or download it from [Releases](https://github.com/flav-code/asterism/releases): a `.dmg` for Apple silicon or Intel
 Macs, an installer for Windows. Asterism updates itself: when a newer version is out, a green arrow shows at the top
 right; click it to restart on the new version. Installed with Scoop, it leaves updates to `scoop update`. To check
-right away: Check for Updates… in the Asterism menu of the menu bar or the Dock icon's menu on macOS, and on Windows
+right away: Settings > Updates, or Check for Updates… in the Asterism menu of the menu bar or the Dock icon's menu on macOS, and on Windows
 in the window's own menu (its icon in the title bar, or Alt+Space) or the taskbar icon's menu.
 
 The builds are not signed yet. On macOS, the first time you open it, macOS blocks it: go to System Settings → Privacy
@@ -44,16 +44,16 @@ The builds are not signed yet. On macOS, the first time you open it, macOS block
 
 ## Languages
 
-English and French. Asterism follows the system's language; the button at the top right picks another one, and the
-choice is kept. The texts live in `locales/`, one JSON file per language (`en.json` is the reference). To add one, copy
+English and French. Asterism follows the system's language; Settings (the gear at the top right, or ⌘, on macOS) picks
+another one, and the choice is kept. The texts live in `locales/`, one JSON file per language (`en.json` is the reference). To add one, copy
 `en.json` to `<code>.json`, translate the values (keep each `%{…}` as it is), and add the code to `LANGUAGES` in
 `crates/core/src/i18n.rs`; `cargo test -p asterism-core i18n` checks that no key is missing.
 
 ## Other machines
 
-Sessions on your VMs, VPSs and dedicated servers show on the map too, next to this computer's. Add one with the
-server button at the top right: a name, and what you type after `ssh` to reach it (`me@host`, or a `Host` from
-`~/.ssh/config`).
+Sessions on your VMs, VPSs and dedicated servers show on the map too, next to this computer's. Add one in Settings >
+Other machines: a name, and what you type after `ssh` to reach it (`me@host`, or a `Host` from `~/.ssh/config`). A dot
+on the gear says when one is on its way (amber) or failed (red).
 
 - Asterism runs the system's `ssh`, so your keys, `~/.ssh/config` and SSH agent apply. It never asks for a password:
   the machine must accept your key, and its host key must be known (connect once from a terminal to accept it).

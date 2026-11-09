@@ -146,8 +146,12 @@ pub struct Shell {
     feed_last: Instant,
     project_menu: bool,
     range_menu: bool,
-    language_menu: bool,
-    machines_menu: bool,
+    /// The settings window, and what a check for updates from it found (title, detail, whether it failed).
+    settings_open: bool,
+    settings_page: SettingsPage,
+    settings_focus: FocusHandle,
+    update_checking: bool,
+    update_answer: Option<(String, String, bool)>,
     /// The machines menu's form, and the machine whose removal waits for a yes.
     machine_name: Entity<InputState>,
     machine_target: Entity<InputState>,
@@ -283,8 +287,11 @@ impl Shell {
             feed_last: Instant::now(),
             project_menu: false,
             range_menu: false,
-            language_menu: false,
-            machines_menu: false,
+            settings_open: false,
+            settings_page: SettingsPage::Language,
+            settings_focus: cx.focus_handle(),
+            update_checking: false,
+            update_answer: None,
             machine_name,
             machine_target,
             machine_remove: None,
@@ -692,21 +699,6 @@ impl Shell {
                 range.into_any_element(),
                 div().w(px(120.0)).flex_shrink_0().child(Input::new(&self.search)).into_any_element(),
                 project.into_any_element(),
-                ctl("panel-toggle", panel_on)
-                    .child(panel_icon(panel_on))
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.panel_last = Instant::now();
-                        if narrow {
-                            // Narrow, the panel lies over the map: opening it there is not a saved choice.
-                            s.panel_narrow_open = !s.panel_narrow_open;
-                        } else {
-                            s.panel_open = !s.panel_open;
-                            let open = s.panel_open;
-                            settings::change(cx, |st| st.panel = open);
-                        }
-                        cx.notify();
-                    }))
-                    .into_any_element(),
                 ctl("replay", replaying)
                     .child(if replaying { t!("shell.stop") } else { t!("shell.replay") }.into_owned())
                     .on_click(cx.listener(|s, _, _, cx| {
@@ -721,6 +713,21 @@ impl Shell {
             Vec::new()
         };
         let update = self.update_button(cx);
+        // The side panel's button, at the right end: above the panel it opens and closes.
+        let panel_toggle = map_tab.then(|| {
+            ctl("panel-toggle", panel_on).child(panel_icon(panel_on)).on_click(cx.listener(move |s, _, _, cx| {
+                s.panel_last = Instant::now();
+                if narrow {
+                    // Narrow, the panel lies over the map: opening it there is not a saved choice.
+                    s.panel_narrow_open = !s.panel_narrow_open;
+                } else {
+                    s.panel_open = !s.panel_open;
+                    let open = s.panel_open;
+                    settings::change(cx, |st| st.panel = open);
+                }
+                cx.notify();
+            }))
+        });
         let first = div()
             .relative()
             .flex()
@@ -730,16 +737,15 @@ impl Shell {
             .children(stats.filter(|_| map_tab))
             // The loader lies in the free room after the tabs and counters, cut to it when the window is narrow.
             .child(div().flex_1().min_w_0().self_stretch().relative().overflow_hidden().children(self.loader()));
-        let language = self.language_button(cx);
-        let machines = self.machines_button(cx);
+        let settings = self.settings_button(cx);
         let bar = div().px(px(16.0)).py(px(10.0)).border_b_1().border_color(line());
         if one_row {
-            bar.child(first.children(controls).children(update).child(machines).child(language))
+            bar.child(first.children(controls).children(update).child(settings).children(panel_toggle))
         } else {
             bar.flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(first.children(update).child(machines).child(language))
+                .child(first.children(update).child(settings).children(panel_toggle))
                 .child(div().flex().flex_wrap().items_center().gap(px(8.0)).children(controls))
         }
     }
@@ -874,9 +880,23 @@ impl Shell {
         cx.notify();
     }
 
-    /// Other machines, at the top right: a dot for how they are (green: all connected, amber: on the way, red: one
-    /// failed); its menu lists them with what each says, adds one, and removes one after a yes.
-    fn machines_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// How the other machines are, for the dot on the settings button: red when one failed, amber while one is on its
+    /// way, green when all are connected; none without machines.
+    fn machines_dot(&self, cx: &App) -> Option<Rgba> {
+        use crate::machines::Status;
+        let states: Vec<Status> =
+            cx.global::<Settings>().machines.iter().map(|m| crate::machines::status(&m.name).map_or(Status::Connecting, |s| s.0)).collect();
+        if states.iter().any(|s| matches!(s, Status::Failed(_))) {
+            Some(red())
+        } else if states.iter().any(|s| *s != Status::Connected) {
+            Some(amber())
+        } else {
+            (!states.is_empty()).then(green)
+        }
+    }
+
+    /// The other machines, in the settings: each with what it says, removed after a yes, and the form that adds one.
+    fn machines_section(&self, cx: &mut Context<Self>) -> Div {
         use crate::machines::Status;
         let machines = cx.global::<Settings>().machines.clone();
         let states: Vec<(Status, usize)> =
@@ -886,331 +906,412 @@ impl Shell {
             Status::Failed(_) => red(),
             _ => amber(),
         };
-        let dot = if states.iter().any(|s| matches!(s.0, Status::Failed(_))) {
-            Some(red())
-        } else if states.iter().any(|s| s.0 != Status::Connected) {
-            Some(amber())
-        } else {
-            (!states.is_empty()).then(green)
-        };
-        let menu = self.machines_menu.then(|| {
-            let rows = machines.iter().zip(&states).map(|(m, (status, sessions))| {
-                let name = m.name.clone();
-                let confirming = self.machine_remove.as_deref() == Some(m.name.as_str());
-                let said = match status {
-                    Status::Connecting => t!("machines.connecting").into_owned(),
-                    Status::Installing => t!("machines.installing").into_owned(),
-                    Status::Connected => i18n::count("machines.sessions", *sessions as u64),
-                    Status::Failed(e) => e.clone(),
-                };
-                let failed = matches!(status, Status::Failed(_));
-                let small = |id: String, label: String, strong: bool| {
-                    div()
-                        .id(SharedString::from(id))
-                        .px(px(8.0))
-                        .py(px(3.0))
-                        .rounded(px(6.0))
-                        .cursor_pointer()
-                        .text_size(px(12.0))
-                        .text_color(if strong { red() } else { muted() })
-                        .border_1()
-                        .border_color(if strong { rgba(0xf8717159) } else { line() })
-                        .hover(|s| s.bg(panel_hi()))
-                        .child(label)
-                };
+        let rows = machines.iter().zip(&states).map(|(m, (status, sessions))| {
+            let name = m.name.clone();
+            let confirming = self.machine_remove.as_deref() == Some(m.name.as_str());
+            let said = match status {
+                Status::Connecting => t!("machines.connecting").into_owned(),
+                Status::Installing => t!("machines.installing").into_owned(),
+                Status::Connected => i18n::count("machines.sessions", *sessions as u64),
+                Status::Failed(e) => e.clone(),
+            };
+            let failed = matches!(status, Status::Failed(_));
+            let small = |id: String, label: String, strong: bool| {
                 div()
-                    .px(px(10.0))
-                    .py(px(7.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(div().size(px(8.0)).flex_none().rounded_full().bg(color_of(status)))
-                            .child(div().flex_1().text_size(px(13.0)).text_color(text()).child(m.name.clone()))
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("machine-remove-{}", m.name)))
-                                    .px(px(6.0))
-                                    .rounded(px(6.0))
-                                    .cursor_pointer()
-                                    .text_size(px(13.0))
-                                    .text_color(faint())
-                                    .hover(|s| s.text_color(text()).bg(panel_hi()))
-                                    .child("✕")
-                                    .tooltip(|_, cx| cx.new(|_| Tip(t!("machines.remove").into_owned(), String::new())).into())
-                                    .on_click(cx.listener(move |s, _, _, cx| {
-                                        s.machine_remove = Some(name.clone());
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .child(div().pl(px(16.0)).font_family(MONO).text_size(px(11.0)).text_color(faint()).child(m.target.clone()))
-                    .child(
-                        div()
-                            .pl(px(16.0))
-                            .text_size(px(12.0))
-                            .line_height(px(16.0))
-                            .text_color(if failed { red() } else { muted() })
-                            .child(said),
-                    )
-                    .when(confirming, |d| {
-                        let name = m.name.clone();
-                        d.child(
-                            div()
-                                .mt(px(4.0))
-                                .ml(px(16.0))
-                                .p(px(8.0))
-                                .rounded(px(8.0))
-                                .bg(rgba(0xf871711a))
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.0))
-                                .child(
-                                    div().text_size(px(12.0)).text_color(text()).child(t!("machines.confirm", name = m.name).into_owned()),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap(px(6.0))
-                                        .child(
-                                            small(format!("machine-yes-{}", m.name), t!("machines.confirm_yes").into_owned(), true)
-                                                .on_click(cx.listener(move |s, _, _, cx| {
-                                                    let list = cx
-                                                        .global::<Settings>()
-                                                        .machines
-                                                        .iter()
-                                                        .filter(|m| m.name != name)
-                                                        .cloned()
-                                                        .collect();
-                                                    settings::set_machines(cx, list);
-                                                    s.machine_remove = None;
-                                                    cx.notify();
-                                                })),
-                                        )
-                                        .child(
-                                            small(format!("machine-no-{}", m.name), t!("machines.cancel").into_owned(), false).on_click(
-                                                cx.listener(|s, _, _, cx| {
-                                                    s.machine_remove = None;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        )
-                    })
-            });
-            let invalid = self.machine_invalid(cx);
-            let typed = !self.machine_name.read(cx).value().is_empty() || !self.machine_target.read(cx).value().is_empty();
-            let add = div()
-                .id("machine-add")
-                .flex_none()
-                .px(px(12.0))
-                .h(px(30.0))
-                .flex()
-                .items_center()
-                .rounded(px(8.0))
-                .text_size(px(12.0))
-                .border_1()
-                .border_color(if invalid.is_none() { rgba(0x38bdf866) } else { line() })
-                .text_color(if invalid.is_none() { blue() } else { faint() })
-                .when(invalid.is_none(), |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
-                .child(t!("machines.add").into_owned())
-                // A grey button says why it is grey.
-                .when_some(invalid.clone(), |d, why| d.tooltip(move |_, cx| cx.new(|_| Tip(why.clone(), String::new())).into()))
-                .on_click(cx.listener(|s, _, window, cx| s.add_machine(window, cx)));
-            deferred(
-                div()
-                    .id("machines-menu")
-                    .absolute()
-                    .top(px(34.0))
-                    .right_0()
-                    .w(px(340.0))
-                    .occlude()
-                    .p(px(6.0))
-                    .rounded(px(10.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(rgba(0xffffff1f))
-                    .shadow_lg()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .px(px(10.0))
-                            .pt(px(6.0))
-                            .pb(px(8.0))
-                            .text_size(px(12.0))
-                            .line_height(px(17.0))
-                            .text_color(muted())
-                            .child(t!("machines.intro").into_owned()),
-                    )
-                    .children(rows)
-                    .child(
-                        div()
-                            .mt(px(4.0))
-                            .p(px(8.0))
-                            .border_t_1()
-                            .border_color(line())
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(Input::new(&self.machine_name))
-                            .child(div().flex().gap(px(6.0)).child(div().flex_1().child(Input::new(&self.machine_target))).child(add))
-                            // Typed but not addable: why, under the form, until it is fixed.
-                            .when_some(invalid.filter(|_| typed), |d, why| {
-                                d.child(div().text_size(px(11.0)).text_color(faint()).child(why))
-                            }),
-                    )
-                    .on_mouse_down_out(cx.listener(|s, _, _, cx| {
-                        s.machines_menu = false;
-                        s.machine_remove = None;
-                        s.menu_closed = Some(("machines", Instant::now()));
-                        cx.notify();
-                    }))
-                    .with_animation(
-                        SharedString::from(format!("machines-menu-{}", self.menu_opens)),
-                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
-                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
-                    ),
-            )
-            .with_priority(1)
-        });
-        let on = self.machines_menu;
-        div()
-            .relative()
-            .flex_shrink_0()
-            .child(
-                div()
-                    .id("machines")
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(32.0))
-                    .h(px(30.0))
-                    .rounded(px(8.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(if on { rgba(0x38bdf866) } else { line() })
-                    .cursor_pointer()
-                    .hover(|s| s.bg(panel_hi()))
-                    .child(crate::icons::line(gpui_kit::assets::IconName::Server, if on { blue() } else { muted() }, 15.0))
-                    .children(dot.map(|c| div().absolute().top(px(5.0)).right(px(5.0)).size(px(6.0)).rounded_full().bg(c)))
-                    .when(!on, |d| {
-                        d.tooltip(|_, cx| {
-                            cx.new(|_| Tip(t!("machines.button").into_owned(), t!("machines.button_sub").into_owned())).into()
-                        })
-                    })
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.machines_menu = !s.machines_menu && s.reopens("machines");
-                        s.machine_remove = None;
-                        s.menu_opens += 1;
-                        cx.notify();
-                    })),
-            )
-            .children(menu)
-            .into_any_element()
-    }
-
-    /// The language, at the top right: the system's, or one picked in its menu (saved for the next launch).
-    fn language_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let chosen = cx.global::<Settings>().language.clone();
-        let menu = self.language_menu.then(|| {
-            let row = |id: &'static str, label: String, pick: Option<&'static str>| {
-                div()
-                    .id(id)
-                    .px(px(10.0))
-                    .py(px(5.0))
+                    .id(SharedString::from(id))
+                    .px(px(8.0))
+                    .py(px(3.0))
                     .rounded(px(6.0))
                     .cursor_pointer()
                     .text_size(px(12.0))
-                    .text_color(if chosen.as_deref() == pick { blue() } else { text() })
-                    .whitespace_nowrap()
+                    .text_color(if strong { red() } else { muted() })
+                    .border_1()
+                    .border_color(if strong { rgba(0xf8717159) } else { line() })
                     .hover(|s| s.bg(panel_hi()))
                     .child(label)
-                    .on_click(cx.listener(move |s, _, window, cx| {
-                        s.language_menu = false;
-                        settings::set_language(cx, pick.map(str::to_string));
-                        // The search box keeps the text it was made with: give it this language's.
-                        s.search.update(cx, |input, cx| input.set_placeholder(t!("shell.search").to_string(), window, cx));
-                        s.machine_name.update(cx, |input, cx| input.set_placeholder(t!("machines.name").to_string(), window, cx));
-                        s.machine_target.update(cx, |input, cx| input.set_placeholder(t!("machines.target").to_string(), window, cx));
-                        cx.notify();
-                    }))
             };
-            let system = t!("language.system", name = i18n::name(settings::system_language())).into_owned();
-            let mut rows = vec![row("lang-system", system, None)];
-            rows.extend(i18n::LANGUAGES.iter().map(|&(code, name)| row(code, name.to_string(), Some(code))));
-            deferred(
-                div()
-                    .id("language-menu")
-                    .absolute()
-                    .top(px(34.0))
-                    .right_0()
-                    .min_w(px(160.0))
-                    .occlude()
-                    .p(px(4.0))
-                    .rounded(px(10.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(rgba(0xffffff1f))
-                    .shadow_lg()
-                    .children(rows)
-                    .on_mouse_down_out(cx.listener(|s, _, _, cx| {
-                        s.language_menu = false;
-                        s.menu_closed = Some(("language", Instant::now()));
-                        cx.notify();
-                    }))
-                    .with_animation(
-                        SharedString::from(format!("language-menu-{}", self.menu_opens)),
-                        Animation::new(Duration::from_millis(140)).with_easing(ease_in_out),
-                        |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
-                    ),
-            )
-            .with_priority(1)
+            div()
+                .px(px(10.0))
+                .py(px(7.0))
+                .rounded(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().size(px(8.0)).flex_none().rounded_full().bg(color_of(status)))
+                        .child(div().flex_1().text_size(px(13.0)).text_color(text()).child(m.name.clone()))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("machine-remove-{}", m.name)))
+                                .px(px(6.0))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .text_size(px(13.0))
+                                .text_color(faint())
+                                .hover(|s| s.text_color(text()).bg(panel_hi()))
+                                .child("✕")
+                                .tooltip(|_, cx| cx.new(|_| Tip(t!("machines.remove").into_owned(), String::new())).into())
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    s.machine_remove = Some(name.clone());
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(div().pl(px(16.0)).font_family(MONO).text_size(px(11.0)).text_color(faint()).child(m.target.clone()))
+                .child(
+                    div()
+                        .pl(px(16.0))
+                        .text_size(px(12.0))
+                        .line_height(px(16.0))
+                        .text_color(if failed { red() } else { muted() })
+                        .child(said),
+                )
+                .when(confirming, |d| {
+                    let name = m.name.clone();
+                    d.child(
+                        div()
+                            .mt(px(4.0))
+                            .ml(px(16.0))
+                            .p(px(8.0))
+                            .rounded(px(8.0))
+                            .bg(rgba(0xf871711a))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .child(div().text_size(px(12.0)).text_color(text()).child(t!("machines.confirm", name = m.name).into_owned()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(6.0))
+                                    .child(
+                                        small(format!("machine-yes-{}", m.name), t!("machines.confirm_yes").into_owned(), true).on_click(
+                                            cx.listener(move |s, _, _, cx| {
+                                                let list =
+                                                    cx.global::<Settings>().machines.iter().filter(|m| m.name != name).cloned().collect();
+                                                settings::set_machines(cx, list);
+                                                s.machine_remove = None;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    )
+                                    .child(small(format!("machine-no-{}", m.name), t!("machines.cancel").into_owned(), false).on_click(
+                                        cx.listener(|s, _, _, cx| {
+                                            s.machine_remove = None;
+                                            cx.notify();
+                                        }),
+                                    )),
+                            ),
+                    )
+                })
         });
-        let on = self.language_menu;
+        let invalid = self.machine_invalid(cx);
+        let typed = !self.machine_name.read(cx).value().is_empty() || !self.machine_target.read(cx).value().is_empty();
+        let add = div()
+            .id("machine-add")
+            .flex_none()
+            .px(px(12.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .rounded(px(8.0))
+            .text_size(px(12.0))
+            .border_1()
+            .border_color(if invalid.is_none() { rgba(0x38bdf866) } else { line() })
+            .text_color(if invalid.is_none() { blue() } else { faint() })
+            .when(invalid.is_none(), |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
+            .child(t!("machines.add").into_owned())
+            // A grey button says why it is grey.
+            .when_some(invalid.clone(), |d, why| d.tooltip(move |_, cx| cx.new(|_| Tip(why.clone(), String::new())).into()))
+            .on_click(cx.listener(|s, _, window, cx| s.add_machine(window, cx)));
+        div().flex().flex_col().gap(px(2.0)).children(rows).child(
+            div()
+                .mt(px(4.0))
+                .p(px(8.0))
+                .border_t_1()
+                .border_color(line())
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(Input::new(&self.machine_name))
+                .child(div().flex().gap(px(6.0)).child(div().flex_1().child(Input::new(&self.machine_target))).child(add))
+                // Typed but not addable: why, under the form, until it is fixed.
+                .when_some(invalid.filter(|_| typed), |d, why| d.child(div().text_size(px(11.0)).text_color(faint()).child(why))),
+        )
+    }
+
+    /// The settings button, at the top right: its menu became the settings window. The dot says how the other
+    /// machines are.
+    fn settings_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let dot = self.machines_dot(cx);
         div()
+            .id("settings-button")
             .relative()
             .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(32.0))
+            .h(px(30.0))
+            .rounded(px(8.0))
+            .bg(panel())
+            .border_1()
+            .border_color(line())
+            .cursor_pointer()
+            .hover(|s| s.bg(panel_hi()))
+            .child(crate::icons::line(gpui_kit::assets::IconName::Settings, muted(), 15.0))
+            .children(dot.map(|c| div().absolute().top(px(5.0)).right(px(5.0)).size(px(6.0)).rounded_full().bg(c)))
+            .tooltip(|_, cx| cx.new(|_| Tip(t!("settings.title").into_owned(), t!("settings.button_sub").into_owned())).into())
+            .on_click(cx.listener(|s, _, window, cx| s.open_settings(window, cx)))
+            .into_any_element()
+    }
+
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        (self.settings_open, self.machine_remove) = (true, None);
+        // A machine that failed: that is what the red dot on the button was about.
+        if self.machines_dot(cx) == Some(red()) {
+            self.settings_page = SettingsPage::Machines;
+        }
+        self.settings_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// The inputs keep the placeholders they were made with: they get this language's.
+    fn relabel_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for (input, key) in
+            [(&self.search, "shell.search"), (&self.machine_name, "machines.name"), (&self.machine_target, "machines.target")]
+        {
+            input.update(cx, |i, cx| i.set_placeholder(t!(key).to_string(), window, cx));
+        }
+    }
+
+    /// Checks for a newer version now; the answer shows under the button.
+    fn check_updates(&mut self, cx: &mut Context<Self>) {
+        if self.update_checking {
+            return;
+        }
+        (self.update_checking, self.update_answer) = (true, None);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
+            this.update(cx, |s, cx| {
+                let (level, title, detail) = crate::menus::checked(found);
+                (s.update_checking, s.update_answer) = (false, Some((title, detail, level == PromptLevel::Warning)));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The settings, over the window: the language, the other machines, the updates. Esc, ✕ or a click outside it
+    /// closes it.
+    fn settings_window(&self, cx: &mut Context<Self>) -> AnyElement {
+        let close = |s: &mut Shell, cx: &mut Context<Shell>| {
+            (s.settings_open, s.machine_remove) = (false, None);
+            cx.notify();
+        };
+        let section = |title: String, sub: String| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .pb(px(8.0))
+                .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(text()).child(title))
+                .when(!sub.is_empty(), |d| d.child(div().text_size(px(12.0)).line_height(px(17.0)).text_color(muted()).child(sub)))
+        };
+        let chosen = cx.global::<Settings>().language.clone();
+        let choice = |id: &'static str, label: String, pick: Option<&'static str>| {
+            let on = chosen.as_deref() == pick;
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(panel_hi()))
+                .text_size(px(13.0))
+                .text_color(if on { text() } else { muted() })
+                .child(
+                    div()
+                        .size(px(14.0))
+                        .flex_none()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(if on { blue() } else { muted() })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(on, |d| d.child(div().size(px(6.0)).rounded_full().bg(blue()))),
+                )
+                .child(label)
+                .on_click(cx.listener(move |s, _, window, cx| {
+                    settings::set_language(cx, pick.map(str::to_string));
+                    s.relabel_inputs(window, cx);
+                    cx.notify();
+                }))
+        };
+        let system = t!("language.system", name = i18n::name(settings::system_language())).into_owned();
+        let mut languages = vec![choice("lang-system", system, None)];
+        languages.extend(i18n::LANGUAGES.iter().map(|&(code, name)| choice(code, name.to_string(), Some(code))));
+        let check = div()
+            .id("settings-check")
+            .flex_none()
+            .px(px(12.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .rounded(px(8.0))
+            .text_size(px(12.0))
+            .border_1()
+            .border_color(if self.update_checking { line() } else { rgba(0x38bdf866) })
+            .text_color(if self.update_checking { faint() } else { blue() })
+            .when(!self.update_checking, |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
+            .child(if self.update_checking { t!("settings.checking") } else { t!("settings.check") }.into_owned())
+            .on_click(cx.listener(|s, _, _, cx| s.check_updates(cx)));
+        let answer = self.update_answer.clone().map(|(title, detail, warning)| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .text_size(px(12.0))
+                .child(div().text_color(if warning { red() } else { text() }).child(title))
+                .child(div().text_color(muted()).child(detail))
+        });
+        use gpui_kit::assets::IconName;
+        let page = self.settings_page;
+        let pages = [
+            (SettingsPage::Language, IconName::Languages, t!("settings.language")),
+            (SettingsPage::Machines, IconName::Server, t!("settings.machines")),
+            (SettingsPage::Updates, IconName::Download, t!("settings.updates")),
+        ];
+        let dot = self.machines_dot(cx);
+        let nav = div()
+            .w(px(210.0))
+            .flex_none()
+            .h_full()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .border_r_1()
+            .border_color(line())
+            .bg(rgba(0xffffff05))
             .child(
                 div()
-                    .id("language")
+                    .px(px(10.0))
+                    .pt(px(6.0))
+                    .pb(px(12.0))
+                    .text_size(px(16.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("settings.title").into_owned()),
+            )
+            .children(pages.iter().map(|(p, icon, label)| {
+                let (p, on) = (*p, *p == page);
+                div()
+                    .id(SharedString::from(format!("settings-page-{p:?}")))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .h(px(30.0))
+                    .gap(px(10.0))
                     .px(px(10.0))
+                    .py(px(7.0))
                     .rounded(px(8.0))
-                    .bg(panel())
-                    .border_1()
-                    .border_color(if on { rgba(0x38bdf866) } else { line() })
-                    .text_color(if on { blue() } else { muted() })
                     .cursor_pointer()
-                    .text_size(px(12.0))
+                    .text_size(px(13.0))
+                    .text_color(if on { text() } else { muted() })
+                    .when(on, |d| d.bg(panel_hi()))
                     .hover(|s| s.bg(panel_hi()))
-                    .child(crate::icons::line(gpui_kit::assets::IconName::Languages, if on { blue() } else { muted() }, 14.0))
-                    .child(i18n::current().to_uppercase())
-                    // Not over its own open menu.
-                    .when(!on, |d| {
-                        d.tooltip(|_, cx| {
-                            cx.new(|_| Tip(t!("language.button").into_owned(), i18n::name(&i18n::current()).to_string())).into()
-                        })
-                    })
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.language_menu = !s.language_menu && s.reopens("language");
-                        s.menu_opens += 1;
+                    .child(crate::icons::line(*icon, if on { blue() } else { muted() }, 15.0))
+                    .child(div().flex_1().child(label.to_string()))
+                    .children(dot.filter(|_| p == SettingsPage::Machines).map(|c| div().size(px(6.0)).rounded_full().bg(c)))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        (s.settings_page, s.machine_remove) = (p, None);
                         cx.notify();
-                    })),
-            )
-            .children(menu)
-            .into_any_element()
+                    }))
+            }));
+        let content = match page {
+            SettingsPage::Language => {
+                div().child(section(t!("settings.language").into_owned(), t!("settings.language_sub").into_owned())).children(languages)
+            }
+            SettingsPage::Machines => div()
+                .child(section(t!("settings.machines").into_owned(), t!("machines.intro").into_owned()))
+                .child(self.machines_section(cx)),
+            SettingsPage::Updates => div()
+                .child(section(
+                    t!("settings.updates").into_owned(),
+                    t!("settings.version", version = env!("CARGO_PKG_VERSION")).into_owned(),
+                ))
+                .child(div().flex().items_start().gap(px(14.0)).child(check).children(answer)),
+        };
+        let card = div()
+            .id("settings")
+            .track_focus(&self.settings_focus)
+            .on_key_down(cx.listener(move |s, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
+                    close(s, cx);
+                }
+            }))
+            .on_mouse_down_out(cx.listener(move |s, _, _, cx| close(s, cx)))
+            .w(px(880.0))
+            .max_w(relative(0.94))
+            .h(px(580.0))
+            .max_h(relative(0.88))
+            .flex()
+            .overflow_hidden()
+            .rounded(px(14.0))
+            .bg(panel())
+            .border_1()
+            .border_color(rgba(0xffffff1f))
+            .shadow_lg()
+            .child(nav)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(div().id("settings-body").size_full().overflow_y_scroll().px(px(28.0)).pt(px(24.0)).pb(px(24.0)).child(content))
+                    .child(
+                        div()
+                            .id("settings-close")
+                            .absolute()
+                            .top(px(14.0))
+                            .right(px(14.0))
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .text_color(muted())
+                            .hover(|s| s.text_color(text()).bg(panel_hi()))
+                            .child("✕")
+                            .on_click(cx.listener(move |s, _, _, cx| close(s, cx))),
+                    ),
+            );
+        deferred(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .bg(rgba(0x0000008c))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(card)
+                .with_animation("settings-in", Animation::new(Duration::from_millis(160)).with_easing(ease_in_out), |el, t| el.opacity(t)),
+        )
+        .with_priority(2)
+        .into_any_element()
     }
 
     /// The live feed, at the bottom left of the map: the newest line slides in at the top.
@@ -1806,8 +1907,39 @@ impl Render for Shell {
         } else {
             div().flex_1().min_h_0().flex().child(content).children(side)
         };
-        div().size_full().flex().flex_col().bg(bg()).text_color(text()).text_size(px(13.0)).child(self.header(wide, window, cx)).child(main)
+        let settings = self.settings_open.then(|| self.settings_window(cx));
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(bg())
+            .text_color(text())
+            .text_size(px(13.0))
+            .child(self.header(wide, window, cx))
+            .child(main)
+            .children(settings)
     }
+}
+
+/// The settings window's categories, listed on its left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SettingsPage {
+    Language,
+    Machines,
+    Updates,
+}
+
+/// The window's shell, for the menus that open its settings.
+pub struct ShellHandle(pub WeakEntity<Shell>);
+
+impl Global for ShellHandle {}
+
+/// Opens the settings window (from a menu).
+pub fn open_settings(cx: &mut App) {
+    let Some(shell) = cx.try_global::<ShellHandle>().and_then(|h| h.0.upgrade()) else { return };
+    let Some(w) = cx.windows().into_iter().next() else { return };
+    w.update(cx, |_, window, cx| shell.update(cx, |s, cx| s.open_settings(window, cx))).ok();
 }
 
 /// A small hover card: a title and a line under it.

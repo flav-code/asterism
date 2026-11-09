@@ -120,18 +120,21 @@ fn main() {
             #[cfg(windows)]
             menus::windows_menu::attach(window);
             let machine = cx.new(|cx| view::Machine::new(rx, window, cx));
-            cx.new(|cx| shell::Shell::new(machine, grx, update::start(), window, cx))
+            let shell = cx.new(|cx| shell::Shell::new(machine, grx, update::start(), window, cx));
+            cx.set_global(shell::ShellHandle(shell.downgrade()));
+            shell
         })
         .expect("a window");
         // Not forwarded: nothing was open, so this one does it once its window is there.
         if let Some(n) = dock_action {
             cx.perform_dock_menu_action(n);
         }
-        // Snapshot builds: MDB_ACTION=check|about runs that menu item.
+        // Snapshot builds: MDB_ACTION=check|about|settings runs that menu item.
         #[cfg(feature = "snapshot")]
         match std::env::var("MDB_ACTION").as_deref() {
             Ok("check") => cx.dispatch_action(&menus::CheckForUpdates),
             Ok("about") => cx.dispatch_action(&menus::About),
+            Ok("settings") => shell::open_settings(cx),
             _ => {}
         }
         cx.on_window_closed(|cx, _| {

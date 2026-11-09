@@ -1,15 +1,16 @@
 //! Menus the system draws, outside the window. On macOS: the menu bar (the Asterism menu, Window) and the Dock icon's
 //! menu. On Windows: the window's own menu (its icon at the top left of the title bar, or Alt+Space) and the taskbar
-//! icon's menu. They show About, check for updates now and, on macOS, hide, quit and minimize.
+//! icon's menu. They show About, open the settings, check for updates now and, on macOS, hide, quit and minimize.
 use gpui_kit::*;
 use rust_i18n::t;
 
-gpui_kit::actions!(asterism, [About, CheckForUpdates, Hide, HideOthers, ShowAll, Quit, Minimize, Zoom]);
+gpui_kit::actions!(asterism, [About, Settings, CheckForUpdates, Hide, HideOthers, ShowAll, Quit, Minimize, Zoom]);
 
 const REPO_URL: &str = "https://github.com/flav-code/asterism";
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &About, cx| about(cx));
+    cx.on_action(|_: &Settings, cx| crate::shell::open_settings(cx));
     cx.on_action(|_: &CheckForUpdates, cx| check_for_updates(cx));
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
@@ -20,6 +21,7 @@ pub fn init(cx: &mut App) {
     if cfg!(target_os = "macos") {
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-,", Settings, None),
             KeyBinding::new("cmd-h", Hide, None),
             KeyBinding::new("alt-cmd-h", HideOthers, None),
             KeyBinding::new("cmd-m", Minimize, None),
@@ -37,6 +39,8 @@ pub fn set(cx: &mut App) {
             items: vec![
                 MenuItem::action(t!("menu.about").into_owned(), About),
                 MenuItem::action(t!("menu.check").into_owned(), CheckForUpdates),
+                MenuItem::separator(),
+                MenuItem::action(t!("menu.settings").into_owned(), Settings),
                 MenuItem::separator(),
                 MenuItem::os_submenu(t!("menu.services").into_owned(), SystemMenuType::Services),
                 MenuItem::separator(),
@@ -99,22 +103,26 @@ fn check_for_updates(cx: &mut App) {
     cx.spawn(async move |cx| {
         let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
         cx.update(|cx| {
-            use crate::update::Checked;
-            let version = env!("CARGO_PKG_VERSION");
-            let (level, title, detail) = match found {
-                Checked::UpToDate => {
-                    (PromptLevel::Info, t!("update.check.up_to_date", version = version), t!("update.check.up_to_date_detail"))
-                }
-                Checked::Ready(v) => (PromptLevel::Info, t!("update.check.ready", version = v), t!("update.check.ready_detail")),
-                Checked::Scoop => (PromptLevel::Info, t!("update.check.scoop"), t!("update.check.scoop_detail")),
-                Checked::NotInstalled => (PromptLevel::Info, t!("update.check.not_installed"), t!("update.check.not_installed_detail")),
-                Checked::Off => (PromptLevel::Info, t!("update.check.off"), t!("update.check.off_detail")),
-                Checked::Failed(why) => (PromptLevel::Warning, t!("update.check.failed"), why.into()),
-            };
+            let (level, title, detail) = checked(found);
             tell(cx, level, &title, &detail, &[&t!("menu.ok")], |_, _| {});
         });
     })
     .detach();
+}
+
+/// What a check found, in words: how grave, a title, a line under it.
+pub fn checked(found: crate::update::Checked) -> (PromptLevel, String, String) {
+    use crate::update::Checked;
+    let version = env!("CARGO_PKG_VERSION");
+    let (level, title, detail) = match found {
+        Checked::UpToDate => (PromptLevel::Info, t!("update.check.up_to_date", version = version), t!("update.check.up_to_date_detail")),
+        Checked::Ready(v) => (PromptLevel::Info, t!("update.check.ready", version = v), t!("update.check.ready_detail")),
+        Checked::Scoop => (PromptLevel::Info, t!("update.check.scoop"), t!("update.check.scoop_detail")),
+        Checked::NotInstalled => (PromptLevel::Info, t!("update.check.not_installed"), t!("update.check.not_installed_detail")),
+        Checked::Off => (PromptLevel::Info, t!("update.check.off"), t!("update.check.off_detail")),
+        Checked::Failed(why) => (PromptLevel::Warning, t!("update.check.failed"), why.into()),
+    };
+    (level, title.into_owned(), detail.into_owned())
 }
 
 /// The window's own menu on Windows (its icon at the top left of the title bar, or Alt+Space): Windows draws it, and
@@ -136,6 +144,7 @@ pub mod windows_menu {
     /// Command ids: below 0xF000 (the system's) and with the low four bits clear, as Windows wants.
     pub const CHECK: usize = 0x1010;
     pub const ABOUT: usize = 0x1020;
+    pub const SETTINGS: usize = 0x1030;
 
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
     static CLICKS: OnceLock<tokio::sync::mpsc::UnboundedSender<usize>> = OnceLock::new();
@@ -146,7 +155,11 @@ pub mod windows_menu {
         CLICKS.set(tx).ok();
         cx.spawn(async move |cx| {
             while let Some(id) = rx.recv().await {
-                cx.update(|cx| if id == CHECK { super::check_for_updates(cx) } else { super::about(cx) });
+                cx.update(|cx| match id {
+                    CHECK => super::check_for_updates(cx),
+                    SETTINGS => crate::shell::open_settings(cx),
+                    _ => super::about(cx),
+                });
             }
         })
         .detach();
@@ -168,6 +181,7 @@ pub mod windows_menu {
             let menu = GetSystemMenu(hwnd, false);
             AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()).ok();
             AppendMenuW(menu, MF_STRING, CHECK, &HSTRING::from(&*t!("menu.check"))).ok();
+            AppendMenuW(menu, MF_STRING, SETTINGS, &HSTRING::from(&*t!("menu.settings"))).ok();
             AppendMenuW(menu, MF_STRING, ABOUT, &HSTRING::from(&*t!("menu.about"))).ok();
             let _ = SetWindowSubclass(hwnd, Some(on_message), 1, 0);
         }
@@ -182,13 +196,14 @@ pub mod windows_menu {
         unsafe {
             let menu = GetSystemMenu(hwnd, false);
             ModifyMenuW(menu, CHECK as u32, MF_BYCOMMAND | MF_STRING, CHECK, &HSTRING::from(&*t!("menu.check"))).ok();
+            ModifyMenuW(menu, SETTINGS as u32, MF_BYCOMMAND | MF_STRING, SETTINGS, &HSTRING::from(&*t!("menu.settings"))).ok();
             ModifyMenuW(menu, ABOUT as u32, MF_BYCOMMAND | MF_STRING, ABOUT, &HSTRING::from(&*t!("menu.about"))).ok();
         }
     }
 
     unsafe extern "system" fn on_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
         let id = wparam.0 & 0xFFF0;
-        if msg == WM_SYSCOMMAND && (id == CHECK || id == ABOUT) {
+        if msg == WM_SYSCOMMAND && (id == CHECK || id == ABOUT || id == SETTINGS) {
             if let Some(tx) = CLICKS.get() {
                 tx.send(id).ok();
             }
