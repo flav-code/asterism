@@ -153,7 +153,8 @@ pub mod windows_menu {
     }
 
     fn hwnd(window: &Window) -> Option<HWND> {
-        match window.window_handle().ok()?.as_raw() {
+        // The trait's method: GPUI's own `window_handle` has the same name.
+        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
             RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as _)),
             _ => None,
         }
