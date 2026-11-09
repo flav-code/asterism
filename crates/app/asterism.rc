@@ -1,4 +1,2 @@
 // Icon 1 is the one Windows shows on the exe, and the one GPUI loads for the window and the taskbar.
 1 ICON "assets/icon.ico"
-// Its manifest (RT_MANIFEST is 24): Common Controls 6, for the system dialogs.
-1 24 "asterism.exe.manifest"
