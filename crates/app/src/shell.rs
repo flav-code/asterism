@@ -54,12 +54,15 @@ impl Tab {
 /// How long the side panel takes to open or close, and a feed line to slide in.
 const PANEL_TAU: f32 = 0.06;
 const SLIDE_IN: Duration = Duration::from_millis(450);
-const FEED_MAX: usize = 7;
+/// Lines the feed keeps: its height is the member's, so it can show many.
+const FEED_MAX: usize = 50;
+/// The feed's lines are never shorter than this; the panel above keeps at least `PANEL_MIN_H`.
+const FEED_MIN_H: f32 = 90.0;
+const PANEL_MIN_H: f32 = 200.0;
+/// From the feed's top edge (its grip) to its first line: the grip and the title.
+const FEED_HEAD_H: f32 = 34.0;
 /// Below this window width, the side panel lies over the map instead of next to it.
 const NARROW: f32 = 1100.0;
-/// The feed's width open, and closed (its title and arrow only, sized for the English title).
-const FEED_OPEN_W: f32 = 380.0;
-const FEED_CLOSED_W: f32 = 118.0;
 
 /// One line of the live feed.
 struct FeedEvent {
@@ -141,9 +144,10 @@ pub struct Shell {
     feed_seq: u64,
     feed_open: bool,
     feed_clicks: u32,
-    /// The feed's width on screen: it narrows to its title when closed.
-    feed_w: f32,
-    feed_last: Instant,
+    /// The height of the feed's lines; its grip changes it, saved once the mouse lets go.
+    feed_h: f32,
+    feed_resized: bool,
+    feed_scroll: crate::glide::Glide,
     project_menu: bool,
     range_menu: bool,
     /// The settings window, and what a check for updates from it found (title, detail, whether it failed).
@@ -283,8 +287,9 @@ impl Shell {
             feed_seq: 0,
             feed_open: saved.feed,
             feed_clicks: 0,
-            feed_w: if saved.feed { FEED_OPEN_W } else { FEED_CLOSED_W },
-            feed_last: Instant::now(),
+            feed_h: saved.feed_h,
+            feed_resized: false,
+            feed_scroll: crate::glide::Glide::default(),
             project_menu: false,
             range_menu: false,
             settings_open: false,
@@ -1315,7 +1320,8 @@ impl Shell {
         .into_any_element()
     }
 
-    /// The live feed, at the bottom left of the map: the newest line slides in at the top.
+    /// The live feed, at the bottom of the side panel: the newest line slides in at the top. Its grip, the top edge,
+    /// sets its height; its title folds it.
     fn feed(&self, cx: &mut Context<Self>) -> Div {
         let lines = self.feed.iter().map(|e| {
             let id = e.id.clone();
@@ -1354,9 +1360,14 @@ impl Shell {
                 )
         });
         let open = self.feed_open;
-        let height = px(16.0 + self.feed.len().max(1) as f32 * 44.0);
+        let height = px(self.feed_h);
         let body = div()
-            .overflow_hidden()
+            .id("feed-lines")
+            .h(height)
+            .overflow_y_scroll()
+            .track_scroll(&self.feed_scroll.handle)
+            .px(px(6.0))
+            .pb(px(6.0))
             .children(lines)
             .when(self.feed.is_empty(), |d| {
                 d.child(
@@ -1369,6 +1380,7 @@ impl Shell {
                         .child(t!("shell.feed.waiting").into_owned()),
                 )
             })
+            .child(self.feed_scroll.driver())
             .with_animation(
                 SharedString::from(format!("feed-{}", self.feed_clicks)),
                 Animation::new(Duration::from_millis(220)).with_easing(ease_in_out),
@@ -1377,27 +1389,32 @@ impl Shell {
                     if open && t >= 1.0 { el } else { el.max_h(height * shown).opacity(shown) }
                 },
             );
+        // The grip: a short bar on the top edge, and the cursor that says it moves up and down.
+        let grip = div()
+            .id("feed-grip")
+            .h(px(8.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor(CursorStyle::ResizeUpDown)
+            .hover(|s| s.bg(rgba(0x38bdf81f)))
+            .child(div().w(px(32.0)).h(px(3.0)).rounded_full().bg(line()))
+            .on_drag(FeedGrip, |_, _, _, cx| cx.new(|_| Nothing));
         div()
-            .absolute()
-            .left(px(16.0))
-            .bottom(px(16.0))
-            .w(px(self.feed_w))
-            .overflow_hidden()
-            .pt(px(10.0))
-            .px(px(6.0))
-            .pb(px(6.0))
-            .rounded(px(12.0))
-            .bg(rgba(0x11121ad1))
-            .border_1()
+            .flex_none()
+            .border_t_1()
             .border_color(line())
+            .bg(panel())
+            .when(open, |d| d.child(grip))
             .child(
                 div()
                     .id("feed-toggle")
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .mx(px(10.0))
-                    .mb(px(6.0))
+                    .px(px(16.0))
+                    .pt(px(if open { 2.0 } else { 10.0 }))
+                    .pb(px(8.0))
                     .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(faint())
@@ -1538,12 +1555,6 @@ fn text_w(window: &mut Window, s: String, size: f32, weight: FontWeight) -> f32 
     font.weight = weight;
     let run = TextRun { len: s.len(), font, color: text().into(), background_color: None, underline: None, strikethrough: None };
     f32::from(window.text_system().shape_line(s.into(), px(size), &[run], None).width())
-}
-
-/// The closed feed's width: its title in this language and the arrow.
-fn feed_closed_w(window: &mut Window) -> f32 {
-    FEED_CLOSED_W + text_w(window, t!("shell.feed.title").into_owned(), 10.5, FontWeight::SEMIBOLD)
-        - text_w(window, "LIVE FEED".into(), 10.5, FontWeight::SEMIBOLD)
 }
 
 /// How much wider the top bar's labels are in this language than in English, whose bar fits on one row from 1320 px.
@@ -1843,18 +1854,6 @@ impl Render for Shell {
                 crate::glide::again(window, cx);
             }
         }
-        // The feed narrows to its title when closed, and widens back when opened.
-        let feed_target = if self.feed_open { FEED_OPEN_W } else { feed_closed_w(window) };
-        if self.feed_w != feed_target {
-            let now = Instant::now();
-            self.feed_w = crate::glide::ease(self.feed_w, feed_target, (now - self.feed_last).as_secs_f32() * 0.7);
-            if (self.feed_w - feed_target).abs() < 0.5 {
-                self.feed_w = feed_target;
-            } else {
-                crate::glide::again(window, cx);
-            }
-        }
-        self.feed_last = Instant::now();
         // The loader's bar slides to the share of history read; once all is read it fades out.
         if let Some(u) = self.usage.clone() {
             let now = Instant::now();
@@ -1871,30 +1870,34 @@ impl Render for Shell {
         }
         let map_tab = matches!(self.tab, Tab::Map | Tab::Timeline);
         let body: AnyElement = match self.tab {
-            Tab::Map => div()
-                .size_full()
-                .relative()
-                .child(self.map.clone())
-                .child(self.feed(cx))
-                .children(self.clock(cx))
-                .children(self.empty(cx))
-                .into_any_element(),
+            Tab::Map => {
+                div().size_full().relative().child(self.map.clone()).children(self.clock(cx)).children(self.empty(cx)).into_any_element()
+            }
             Tab::Timeline => div().size_full().relative().child(self.timeline.clone()).children(self.empty(cx)).into_any_element(),
             Tab::Machine => self.machine.clone().into_any_element(),
             Tab::Usage => self.dash.clone().into_any_element(),
         };
         self.panel.update(cx, |p, _| p.active = map_tab && self.panel_w > 0.0);
         let wide = f32::from(window.viewport_size().width) >= 1700.0;
-        // The panel: next to the map and the timeline, or over them when the window is narrow.
+        // The panel: next to the map and the timeline, or over them when the window is narrow. The live feed is at
+        // its bottom; dragging the feed's grip shares the height between them.
         let side = (map_tab && self.panel_w > 0.0).then(|| {
-            div()
-                .h_full()
-                .flex_none()
-                .w(px(self.panel_w))
-                .overflow_hidden()
-                .border_l_1()
-                .border_color(line())
-                .child(div().w(px(panel::WIDTH)).h_full().child(self.panel.clone()))
+            div().h_full().flex_none().w(px(self.panel_w)).overflow_hidden().border_l_1().border_color(line()).child(
+                div()
+                    .w(px(panel::WIDTH))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex_1().min_h_0().child(self.panel.clone()))
+                    .child(self.feed(cx))
+                    .on_drag_move(cx.listener(|s, e: &DragMoveEvent<FeedGrip>, _, cx| {
+                        let room = f32::from(e.bounds.size.height) - PANEL_MIN_H - FEED_HEAD_H;
+                        let h = f32::from(e.bounds.bottom() - e.event.position.y) - FEED_HEAD_H;
+                        s.feed_h = h.clamp(FEED_MIN_H, room.max(FEED_MIN_H));
+                        s.feed_resized = true;
+                        cx.notify();
+                    })),
+            )
         });
         let content = div().flex_1().min_w_0().h_full().child(body);
         let main = if narrow {
@@ -1917,9 +1920,31 @@ impl Render for Shell {
             .bg(bg())
             .text_color(text())
             .text_size(px(13.0))
+            // The feed's new height is saved once the mouse lets go of its grip.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|s, _, _, cx| {
+                    if std::mem::take(&mut s.feed_resized) {
+                        let h = s.feed_h;
+                        settings::change(cx, |st| st.feed_h = h);
+                    }
+                }),
+            )
             .child(self.header(wide, window, cx))
             .child(main)
             .children(settings)
+    }
+}
+
+/// What the feed's grip carries while it is dragged.
+struct FeedGrip;
+
+/// Nothing to draw under the mouse while the grip is dragged.
+struct Nothing;
+
+impl Render for Nothing {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
     }
 }
 

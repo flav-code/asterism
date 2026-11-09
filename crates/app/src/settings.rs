@@ -16,6 +16,8 @@ pub struct Settings {
     pub titles: String,
     pub panel: bool,
     pub feed: bool,
+    /// The feed's height in the side panel, in points (its lines, under its title).
+    pub feed_h: f32,
     pub usage_range: String,
     pub usage_metric: String,
     /// A code from `i18n::LANGUAGES`; none follows the system's language.
@@ -44,6 +46,7 @@ impl Default for Settings {
             titles: "hover".into(),
             panel: true,
             feed: true,
+            feed_h: 240.0,
             usage_range: "30d".into(),
             usage_metric: "usd".into(),
             language: None,
@@ -101,6 +104,7 @@ impl Settings {
             titles: s("map_titles", &d.titles),
             panel: b("panel", d.panel),
             feed: b("feed", d.feed),
+            feed_h: v.get("feed_h").and_then(Value::as_f64).map(|h| h as f32).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(d.feed_h),
             usage_range: s("usage_range", &d.usage_range),
             usage_metric: s("usage_metric", &d.usage_metric),
             language: v.get("language").and_then(Value::as_str).filter(|l| i18n::LANGUAGES.iter().any(|(c, _)| c == l)).map(str::to_string),
@@ -121,7 +125,7 @@ impl Settings {
         }
         let v = json!({
             "tab": self.tab, "range": self.range, "project": self.project, "archived": self.archived, "agents": self.agents,
-            "map_titles": self.titles, "panel": self.panel, "feed": self.feed,
+            "map_titles": self.titles, "panel": self.panel, "feed": self.feed, "feed_h": self.feed_h,
             "usage_range": self.usage_range, "usage_metric": self.usage_metric, "language": self.language,
             "machines": self.machines.iter().map(|m| json!({ "name": m.name, "target": m.target })).collect::<Vec<_>>(),
         });
