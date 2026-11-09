@@ -39,9 +39,10 @@ struct Pair {
     last: u64,
 }
 
+/// Ends by session id: a new layout numbers the bubbles again.
 struct Comet {
-    from: usize,
-    to: usize,
+    from: String,
+    to: String,
     started: Instant,
     color: Rgba,
 }
@@ -234,8 +235,9 @@ impl MapView {
     }
 
     pub fn queue_comet(&mut self, from: &str, to: &str, report: bool) {
-        if let (Some(&a), Some(&b)) = (self.body_of.get(from), self.body_of.get(to)) {
-            self.comets.push(Comet { from: a, to: b, started: Instant::now(), color: if report { green() } else { blue() } });
+        if self.body_of.contains_key(from) && self.body_of.contains_key(to) {
+            let (from, to) = (from.to_string(), to.to_string());
+            self.comets.push(Comet { from, to, started: Instant::now(), color: if report { green() } else { blue() } });
         }
     }
 
@@ -371,6 +373,10 @@ impl MapView {
                 h.finish()
             })
             .collect();
+        // The hovered bubble's number is the last layout's: find the bubble under the mouse again.
+        if self.hover.is_some() {
+            self.hover = self.hit(self.mouse);
+        }
         if changed || self.first_layout {
             // A bubble on the map never moves on its own: new links or arcs between known bubbles only redraw, and
             // new bubbles find their place around the others, which hold still. Only a first map lays out freely.
@@ -859,7 +865,8 @@ impl Render for MapView {
         // Comets: a dot flies along the arc, then a ripple at the receiver.
         self.comets.retain(|c| c.started.elapsed() < COMET + RIPPLE);
         for c in &self.comets {
-            let (a, b) = (at(c.from), at(c.to));
+            let (Some(&from), Some(&to)) = (self.body_of.get(&c.from), self.body_of.get(&c.to)) else { continue };
+            let (a, b) = (at(from), at(to));
             let e = c.started.elapsed();
             if e < COMET {
                 let t = e.as_secs_f32() / COMET.as_secs_f32();
@@ -869,7 +876,7 @@ impl Render for MapView {
                 scene.comets.push((quad_point(a, ctrl, b, t), c.color));
             } else {
                 let t = (e - COMET).as_secs_f32() / RIPPLE.as_secs_f32();
-                scene.ripples.push((b, self.radius[c.to] * k + 34.0 * t, alpha(c.color, 1.0 - t)));
+                scene.ripples.push((b, self.radius[to] * k + 34.0 * t, alpha(c.color, 1.0 - t)));
             }
         }
         fades.end();

@@ -201,6 +201,10 @@ impl TimelineView {
         self.colors = project_colors(&g);
         self.layout = Rc::new(Layout { rows, row_of, agents, links, msgs });
         (self.graph, self.v) = (Some(g), Some(v));
+        // The hover holds indices into the last graph: find what is under the mouse in this one.
+        if self.hover.is_some() || self.hover_row.is_some() {
+            (self.hover_row, self.hover) = self.hit(self.mouse);
+        }
         cx.notify();
     }
 

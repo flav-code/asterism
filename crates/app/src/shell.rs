@@ -98,6 +98,8 @@ impl What {
 
 /// Every message of the range again, fast-forwarded: comets on the map and lines in the feed.
 struct Replay {
+    /// The graph it started from: `msgs` are indices into it, and a newer graph numbers its messages again.
+    graph: Arc<Graph>,
     msgs: Vec<usize>,
     t0: u64,
     span: u64,
@@ -109,8 +111,8 @@ struct Replay {
 }
 
 impl Replay {
-    fn at(&self, g: &Graph, i: usize) -> f32 {
-        (g.messages[self.msgs[i]].ts.saturating_sub(self.t0)) as f32 / self.span as f32 * self.dur
+    fn at(&self, i: usize) -> f32 {
+        (self.graph.messages[self.msgs[i]].ts.saturating_sub(self.t0)) as f32 / self.span as f32 * self.dur
     }
 }
 
@@ -399,7 +401,7 @@ impl Shell {
         let span = now_ms().saturating_sub(t0).max(1);
         let dur = (4.0 + msgs.len() as f32 * 0.09).min(45.0);
         self.feed.clear();
-        self.replay = Some(Replay { msgs, t0, span, dur, base: Instant::now(), next: 0 });
+        self.replay = Some(Replay { graph: g, msgs, t0, span, dur, base: Instant::now(), next: 0 });
         if self.tab != Tab::Map {
             self.set_tab(Tab::Map, cx);
         }
@@ -408,11 +410,10 @@ impl Shell {
 
     /// Jump to `frac` (0 to 1) of the replay.
     fn seek(&mut self, frac: f32, cx: &mut Context<Self>) {
-        let Some(g) = self.graph.clone() else { return };
         if let Some(r) = self.replay.as_mut() {
             let from = frac.clamp(0.0, 1.0) * r.dur;
             r.base = Instant::now() - Duration::from_secs_f32(from);
-            r.next = (0..r.msgs.len()).find(|&i| r.at(&g, i) >= from).unwrap_or(r.msgs.len());
+            r.next = (0..r.msgs.len()).find(|&i| r.at(i) >= from).unwrap_or(r.msgs.len());
             self.feed.clear();
             cx.notify();
         }
@@ -420,10 +421,11 @@ impl Shell {
 
     /// Fires the replayed messages that are due; stops 1.5 s after the last.
     fn tick_replay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(g), Some(r)) = (self.graph.clone(), self.replay.as_mut()) else { return };
+        let Some(r) = self.replay.as_mut() else { return };
+        let g = r.graph.clone();
         let el = r.base.elapsed().as_secs_f32();
         let mut due = Vec::new();
-        while r.next < r.msgs.len() && r.at(&g, r.next) <= el {
+        while r.next < r.msgs.len() && r.at(r.next) <= el {
             due.push(r.msgs[r.next]);
             r.next += 1;
         }
