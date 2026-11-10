@@ -2,7 +2,7 @@
 //! `mdb serve [--lang <code>]`: the agent the app starts over SSH on another machine (see `serve`).
 use asterism_core::Monitor;
 use asterism_core::attribute::{OwnerKind, Report};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -106,7 +106,7 @@ fn serve(args: &[String]) -> ! {
         std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).ok();
         std::process::exit(0);
     });
-    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut out = BufWriter::new(std::io::stdout().lock());
     let mut write = move |frames: &[Frame]| {
         frames
             .iter()

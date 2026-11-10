@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Compose's container labels: the project's name, its folder, and its files.
 pub const COMPOSE_PROJECT: &str = "com.docker.compose.project";
 pub const COMPOSE_DIR: &str = "com.docker.compose.project.working_dir";
 pub const COMPOSE_FILES: &str = "com.docker.compose.project.config_files";
@@ -98,6 +99,7 @@ pub fn summarize(c: &Value) -> Container {
 }
 
 /// The engine the `docker` CLI would talk to: `DOCKER_HOST`, else the current context's, else the default.
+#[must_use]
 pub fn engine_host(home: &Path) -> Option<String> {
     if let Ok(h) = std::env::var("DOCKER_HOST") {
         return Some(h);

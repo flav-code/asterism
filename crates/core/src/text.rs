@@ -71,6 +71,7 @@ static ADD_DIR: LazyLock<Regex> = LazyLock::new(|| re(r"--add-dir[= ]"));
 static NEXT_OPTION: LazyLock<Regex> = LazyLock::new(|| re(r" --?[a-zA-Z]"));
 static DOCKER_CLI: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:\S*[/\\])?docker(?:-compose)?(?:\.exe)?(?: |$)"));
 
+/// Whether a command line holds one of the `HEAVY` commands as a whole word.
 pub fn is_heavy(cmd: &str) -> bool {
     HEAVY_RE.is_match(cmd)
 }
@@ -88,6 +89,7 @@ pub fn is_claude(cmd: &str) -> bool {
     (is_path && (name == "claude" || name == "claude.exe")) || NODE_CLAUDE.is_match(cmd)
 }
 
+/// Whether a command line runs the `docker` or `docker-compose` program.
 pub fn is_docker_cli(cmd: &str) -> bool {
     DOCKER_CLI.is_match(cmd)
 }
@@ -117,6 +119,7 @@ pub fn readable(cmd: &str) -> String {
 
 /// A command as people read it: the program by its name, not its full path ("/opt/x/bin/uv tool run" → "uv tool run").
 /// The program is everything before the first option, since app paths hold spaces.
+#[must_use]
 pub fn short_program(cmd: &str) -> String {
     if !(cmd.starts_with('/') || cmd.starts_with('~') || cmd.get(1..3) == Some(":\\")) {
         return cmd.to_string();

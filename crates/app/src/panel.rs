@@ -1,7 +1,7 @@
 //! The side panel of the map and the timeline: "Right now" when nothing is selected, else the selected session or
 //! subagent: what it is, what it does now, who started it, what it started, its messages and its subagents.
 use crate::glide::Glide;
-use crate::state::{Filters, is_session, visible, working};
+use crate::state::{self, Filters, Origin};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
@@ -9,6 +9,7 @@ use asterism_core::i18n;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,7 +51,7 @@ impl Panel {
             loop {
                 cx.background_executor().timer(Duration::from_millis(100)).await;
                 let alive = this.update(cx, |p, cx| {
-                    let beating = p.graph.as_ref().is_some_and(|g| g.nodes.iter().any(|n| is_session(n) && working(n)));
+                    let beating = p.graph.as_ref().is_some_and(|g| g.nodes.iter().any(|n| state::is_session(n) && state::working(n)));
                     if p.active && beating {
                         cx.notify();
                     }
@@ -78,7 +79,7 @@ impl Panel {
     }
 
     pub fn set_graph(&mut self, g: Arc<Graph>, filters: &Filters, cx: &mut Context<Self>) {
-        self.in_range = visible(&g, filters, now_ms()).messages;
+        self.in_range = state::visible(&g, filters, now_ms()).messages;
         self.range_h = filters.range_h;
         self.index = g.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
         self.graph = Some(g);
@@ -128,14 +129,14 @@ impl Panel {
 
     /// A status dot: green and glowing when open, amber and beating when working, grey otherwise.
     fn dot(&self, n: &Node, size: f32) -> Div {
-        let (color, glow) = if working(n) || (n.kind == NodeKind::Agent && n.live) {
+        let (color, glow) = if state::working(n) || (n.kind == NodeKind::Agent && n.live) {
             (amber(), true)
         } else if n.live {
             (green(), true)
         } else {
             (faint(), false)
         };
-        let beat = if working(n) {
+        let beat = if state::working(n) {
             0.55 + 0.45 * (0.5 + 0.5 * (self.started.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos())
         } else {
             1.0
@@ -152,9 +153,9 @@ impl Panel {
     }
 
     fn overview(&self, g: &Graph, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut live: Vec<&Node> = g.nodes.iter().filter(|n| is_session(n) && n.live).collect();
-        live.sort_by(|a, b| working(b).cmp(&working(a)).then(b.last_at.cmp(&a.last_at)));
-        let busy = live.iter().filter(|n| working(n)).count();
+        let mut live: Vec<&Node> = g.nodes.iter().filter(|n| state::is_session(n) && n.live).collect();
+        live.sort_by(|a, b| state::working(b).cmp(&state::working(a)).then(b.last_at.cmp(&a.last_at)));
+        let busy = live.iter().filter(|n| state::working(n)).count();
         let agents = g.nodes.iter().filter(|n| n.kind == NodeKind::Agent && n.live).count();
         let big = |n: usize, label: &str, color: Rgba| {
             div()
@@ -193,7 +194,7 @@ impl Panel {
                                 .flex_none()
                                 .font_family(MONO)
                                 .text_size(px(11.0))
-                                .text_color(if working(n) { amber() } else { faint() })
+                                .text_color(if state::working(n) { amber() } else { faint() })
                                 .child(crate::state::tool_name(&m.tool).into_owned()),
                         )
                         .child(div().min_w_0().child(clip(&m.detail, 90))),
@@ -206,7 +207,7 @@ impl Panel {
                     .items_center()
                     .gap(px(4.0))
                     .children(o.icon().map(|icon| crate::icons::line(icon, faint(), 11.0)))
-                    .when(o == crate::state::Origin::Machine, |d| d.child(clip(&n.machine, 14)))
+                    .when(o == Origin::Machine, |d| d.child(clip(&n.machine, 14)))
                     .child(ago(now.saturating_sub(when) / 1000));
                 item(&n.id, self.dot(n, 10.0), n.title.clone(), right, Some(sum.into_any_element()), cx)
             })
@@ -244,11 +245,11 @@ impl Panel {
         let now = now_ms();
         let node = |id: &str| self.index.get(id).map(|&i| &g.nodes[i]);
         let mut msgs: Vec<usize> = (0..g.messages.len()).filter(|&m| g.messages[m].from == n.id || g.messages[m].to == n.id).collect();
-        msgs.sort_by_key(|&m| std::cmp::Reverse(g.messages[m].ts));
+        msgs.sort_by_key(|&m| Reverse(g.messages[m].ts));
         msgs.truncate(120);
         let out = |k: EdgeKind| -> Vec<&Node> {
             let mut v: Vec<&Node> = g.edges.iter().filter(|e| e.from == n.id && e.kind == k).filter_map(|e| node(&e.to)).collect();
-            v.sort_by_key(|x| std::cmp::Reverse(x.created_at));
+            v.sort_by_key(|x| Reverse(x.created_at));
             v
         };
         let parents: Vec<(EdgeKind, &Node)> = g
@@ -260,7 +261,7 @@ impl Panel {
         let agents = out(EdgeKind::Agent);
         let mut kids = out(EdgeKind::Spawn);
         kids.extend(out(EdgeKind::Fork));
-        kids.sort_by_key(|x| std::cmp::Reverse(x.created_at));
+        kids.sort_by_key(|x| Reverse(x.created_at));
 
         let kind = match n.kind {
             NodeKind::Agent => n.agent_type.clone().unwrap_or_else(|| t!("panel.kind.subagent").into()),
@@ -330,7 +331,7 @@ impl Panel {
             ));
         }
         let now_card = n.now.as_ref().map(|m| {
-            let busy = working(n);
+            let busy = state::working(n);
             div()
                 .mt(px(12.0))
                 .px(px(12.0))

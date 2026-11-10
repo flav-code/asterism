@@ -55,6 +55,7 @@ pub struct Transcript {
 
 impl Transcript {
     /// Everything the file held when last looked at has been read.
+    #[must_use]
     pub fn complete(&self) -> bool {
         self.offset >= self.size
     }
@@ -178,6 +179,7 @@ pub struct Transcripts {
 
 impl Transcripts {
     /// Bytes read so far, over every file.
+    #[must_use]
     pub fn read_bytes(&self) -> u64 {
         self.files.values().map(|t| t.offset).sum()
     }

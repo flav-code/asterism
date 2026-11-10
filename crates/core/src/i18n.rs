@@ -11,6 +11,7 @@ pub struct Language {
     pub name: &'static str,
 }
 
+/// The languages there is a file for.
 pub const LANGUAGES: [Language; 2] = [Language { code: "en", name: "English" }, Language { code: "fr", name: "Français" }];
 
 /// The first of these system languages ("fr-CA", "en_US", "fr"…) there is a file for; English if none.
@@ -24,26 +25,32 @@ pub fn pick<'a>(wanted: impl IntoIterator<Item = &'a str>) -> &'static str {
         .unwrap_or("en")
 }
 
+/// Switches every text to `lang`, a code of `LANGUAGES`.
 pub fn set(lang: &str) {
     rust_i18n::set_locale(lang);
 }
 
+/// The code of the language in use.
+#[must_use]
 pub fn current() -> String {
     rust_i18n::locale().to_string()
 }
 
 /// The name of a language in itself ("Français"), or the code when there is no file for it.
+#[must_use]
 pub fn name(code: &str) -> &str {
     LANGUAGES.iter().find(|l| l.code == code).map_or(code, |l| l.name)
 }
 
 /// `key.one` or `key.other` for `n`, with `%{n}` filled in. French says 0 and 1 in the singular, English only 1.
+#[must_use]
 pub fn count(key: &str, n: u64) -> String {
     let one = if current() == "fr" { n < 2 } else { n == 1 };
     t!(format!("{key}.{}", if one { "one" } else { "other" }), n = n).into_owned()
 }
 
 /// `x` with `places` decimals and this language's decimal mark ("1.5" in English, "1,5" in French).
+#[must_use]
 pub fn decimal(x: f64, places: usize) -> String {
     let s = format!("{x:.places$}");
     let mark = t!("number.decimal");

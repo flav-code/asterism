@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -59,6 +60,7 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
 }
 
 /// The project a folder belongs to: its name, or the repository's for a worktree under `.claude/worktrees`.
+#[must_use]
 pub fn project_of(cwd: &str) -> String {
     let base = cwd.split("/.claude/worktrees/").next().unwrap_or(cwd).trim_end_matches(['/', '\\']);
     base.rsplit(['/', '\\']).next().unwrap_or(base).to_string()
@@ -145,6 +147,7 @@ fn meta(d: Option<&DesktopSession>, r: Option<&Value>) -> SessionMeta {
 }
 
 /// The latest tool call without a result, from the end of a transcript (one JSON event per line).
+#[must_use]
 pub fn current_activity(transcript: &Path) -> Option<Activity> {
     const TAIL: u64 = 512 * 1024;
     let mut f = fs::File::open(transcript).ok()?;
@@ -197,8 +200,9 @@ pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity>
 }
 
 /// "2026-11-07T20:15:03.123Z" → ms since the epoch (UTC only, which is what transcripts hold).
+#[must_use]
 pub fn iso_ms(s: &str) -> Option<u64> {
-    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let n = |r: Range<usize>| s.get(r)?.parse::<i64>().ok();
     let (y, m, d, hh, mm, ss) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
     let ms = s.get(19..).filter(|r| r.starts_with('.')).map_or(0, |r| {
         let digits: String = r[1..].chars().take_while(char::is_ascii_digit).take(3).collect();

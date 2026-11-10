@@ -4,6 +4,8 @@
 use gpui_kit::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+#[cfg(feature = "snapshot")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// How fast a glide closes in: about 95% of the way in 3 × TAU.
@@ -237,7 +239,7 @@ pub fn off() -> bool {
 
 /// Snapshot builds print `trace <what> <ms> <value>` once a wheel test has started, to chart the motion.
 #[cfg(feature = "snapshot")]
-pub static TRACE_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+pub static TRACE_START: OnceLock<Instant> = OnceLock::new();
 
 pub fn trace(what: &str, value: f32) {
     #[cfg(feature = "snapshot")]

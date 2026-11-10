@@ -1,6 +1,7 @@
 //! Menus the system draws, outside the window. On macOS: the menu bar (the Asterism menu, Window) and the Dock icon's
 //! menu. On Windows: the window's own menu (its icon at the top left of the title bar, or Alt+Space) and the taskbar
 //! icon's menu. They show About, open the settings, check for updates now and, on macOS, hide, quit and minimize.
+use crate::update::Checked;
 use gpui_kit::*;
 use rust_i18n::t;
 
@@ -121,8 +122,7 @@ pub struct Said {
 }
 
 /// What a check found, in words.
-pub fn checked(found: crate::update::Checked) -> Said {
-    use crate::update::Checked;
+pub fn checked(found: Checked) -> Said {
     let version = env!("CARGO_PKG_VERSION");
     let (level, title, detail) = match found {
         Checked::UpToDate => (PromptLevel::Info, t!("update.check.up_to_date", version = version), t!("update.check.up_to_date_detail")),

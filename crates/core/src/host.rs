@@ -77,6 +77,7 @@ impl Default for HostSampler {
 }
 
 impl HostSampler {
+    /// Every process now, with its command line, memory and CPU since the last call.
     pub fn processes(&mut self) -> Vec<Proc> {
         // Never the environment: it holds secrets and is never shown.
         let kind = ProcessRefreshKind::nothing()
@@ -109,6 +110,7 @@ impl HostSampler {
             .collect()
     }
 
+    /// The machine now: CPU, memory, swap and, on macOS, memory pressure.
     pub fn host(&mut self) -> Host {
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
@@ -140,9 +142,9 @@ impl HostSampler {
 
 #[cfg(target_os = "macos")]
 fn footprint(pid: u32) -> Option<u64> {
-    use libproc::pid_rusage::{RUsageInfoV2, pidrusage};
+    use libproc::pid_rusage::{self, RUsageInfoV2};
     // Other users' processes refuse it: their resident size stands in.
-    pidrusage::<RUsageInfoV2>(i32::try_from(pid).ok()?).ok().map(|r| r.ri_phys_footprint)
+    pid_rusage::pidrusage::<RUsageInfoV2>(i32::try_from(pid).ok()?).ok().map(|r| r.ri_phys_footprint)
 }
 
 // shortcut: Windows shows the working set, not the private working set Task Manager shows; read it in M3.
@@ -163,6 +165,7 @@ mod mac {
         pub page: u64,
     }
 
+    /// The kernel's memory counters; none when it does not give them.
     #[allow(deprecated)] // libc points to the mach2 crate for these, but they work and save a dependency
     pub fn vm_stats() -> Option<VmStats> {
         // SAFETY: vm_statistics64 holds only integers, for which all zeroes is a value.

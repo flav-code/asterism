@@ -2,8 +2,9 @@
 //! they send, and to their subagents. Positions are kept between launches so the map looks the same each time.
 use crate::glide;
 use crate::layout::{Body, Link, Sim};
-use crate::settings::{self, Settings, data_dir};
-use crate::state::{Filters, is_session, node_tip, project_colors, tool_name, visible, working};
+use crate::seg::Seg;
+use crate::settings::{self, Settings};
+use crate::state::{self, Filters, Origin};
 use crate::ui::*;
 use crate::ui::{blue, green}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, Node, NodeKind};
@@ -11,7 +12,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
+use std::borrow::Cow;
 use std::cell::Cell;
+use std::cmp::Reverse;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -86,7 +90,7 @@ pub struct MapView {
     seen: HashSet<String>,
     _breath: Task<()>,
     fades: glide::Fades,
-    titles_seg: crate::seg::Seg,
+    titles_seg: Seg,
     /// A hash of each body's session id: the key of its fades.
     hashes: Vec<u64>,
     /// New bubbles are finding their place while the others hold still; these may move.
@@ -138,7 +142,7 @@ fn radius_of(n: &Node, deg: u32) -> f32 {
 
 /// The same small offset for the same id: new bubbles start near their anchor without being random.
 fn jitter(id: &str) -> (f32, f32) {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     id.hash(&mut h);
     let v = h.finish();
     (((v & 0xffff) as f32 / 65535.0 - 0.5) * 60.0, (((v >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * 60.0)
@@ -150,7 +154,7 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
 
 impl MapView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let saved_by_range = std::fs::read(data_dir().join("positions-by-range.json"))
+        let saved_by_range = std::fs::read(settings::data_dir().join("positions-by-range.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<HashMap<String, HashMap<String, (f32, f32)>>>(&b).ok())
             .unwrap_or_default();
@@ -211,7 +215,7 @@ impl MapView {
             seen: HashSet::new(),
             _breath: breath,
             fades: glide::Fades::default(),
-            titles_seg: crate::seg::Seg::default(),
+            titles_seg: Seg::default(),
             hashes: Vec::new(),
             newcomers: HashSet::new(),
             #[cfg(feature = "snapshot")]
@@ -229,7 +233,7 @@ impl MapView {
 
     fn any_working(&self) -> bool {
         let Some(g) = &self.graph else { return false };
-        self.node_of.iter().any(|&i| working(&g.nodes[i]) || (g.nodes[i].kind == NodeKind::Agent && g.nodes[i].live))
+        self.node_of.iter().any(|&i| state::working(&g.nodes[i]) || (g.nodes[i].kind == NodeKind::Agent && g.nodes[i].live))
     }
 
     pub fn set_graph(&mut self, graph: Arc<Graph>, filters: &Filters, cx: &mut Context<Self>) {
@@ -256,7 +260,7 @@ impl MapView {
             (self.body_of, self.sim.bodies, self.newcomers) = (HashMap::new(), Vec::new(), HashSet::new());
         }
         self.filters = filters.clone();
-        self.colors = project_colors(&graph);
+        self.colors = state::project_colors(&graph);
         self.graph = Some(graph);
         self.relayout();
         cx.notify();
@@ -271,7 +275,7 @@ impl MapView {
 
     fn relayout(&mut self) {
         let Some(g) = self.graph.clone() else { return };
-        let v = visible(&g, &self.filters, now_ms());
+        let v = state::visible(&g, &self.filters, now_ms());
         let index: HashMap<&str, usize> = g.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
         let shown: HashMap<usize, usize> = v.nodes.iter().enumerate().map(|(b, &i)| (i, b)).collect();
         let body = |id: &str| index.get(id).and_then(|i| shown.get(i)).copied();
@@ -309,13 +313,13 @@ impl MapView {
         }
         let nodes: Vec<&Node> = v.nodes.iter().map(|&i| &g.nodes[i]).collect();
         let radius: Vec<f32> = nodes.iter().zip(&deg).map(|(n, &d)| radius_of(n, d)).collect();
-        let iso: Vec<bool> = nodes.iter().zip(&linked).map(|(n, &l)| is_session(n) && !n.live && !l).collect();
-        let many = nodes.iter().filter(|n| is_session(n)).count() > 24;
+        let iso: Vec<bool> = nodes.iter().zip(&linked).map(|(n, &l)| state::is_session(n) && !n.live && !l).collect();
+        let many = nodes.iter().filter(|n| state::is_session(n)).count() > 24;
         self.quiet = nodes.iter().zip(&deg).map(|(n, &d)| n.kind != NodeKind::Agent && many && !n.live && d < 2).collect();
 
         // Project anchors on a circle, the busiest project nearest the middle.
         let mut counts: HashMap<&str, usize> = HashMap::new();
-        for n in nodes.iter().filter(|n| is_session(n)) {
+        for n in nodes.iter().filter(|n| state::is_session(n)) {
             *counts.entry(&n.project).or_default() += 1;
         }
         let mut list: Vec<(&str, usize)> = counts.into_iter().collect();
@@ -330,7 +334,7 @@ impl MapView {
         let remote = (0.0, big + 260.0);
         self.sim.ring_r = 170.0 + (nodes.iter().zip(&iso).filter(|(n, i)| !**i && n.kind != NodeKind::Agent).count() as f32).sqrt() * 42.0;
 
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = DefaultHasher::new();
         for n in &nodes {
             n.id.hash(&mut h);
         }
@@ -399,7 +403,7 @@ impl MapView {
         self.hashes = nodes
             .iter()
             .map(|n| {
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = DefaultHasher::new();
                 n.id.hash(&mut h);
                 h.finish()
             })
@@ -439,7 +443,7 @@ impl MapView {
         let ids: HashSet<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         self.saved.retain(|id, _| ids.contains(id.as_str()));
         self.saved_by_range.insert(self.range_key.clone(), self.saved.clone());
-        let dir = data_dir();
+        let dir = settings::data_dir();
         if std::fs::create_dir_all(&dir).is_ok()
             && let Ok(json) = serde_json::to_vec(&self.saved_by_range)
         {
@@ -787,11 +791,11 @@ impl Render for MapView {
         let prio = |b: usize| {
             let n = &g.nodes[self.node_of[b]];
             (Some(n.id.as_str()) == self.selected.as_deref()) as u32 * 1_000_000
-                + working(n) as u32 * 100_000
+                + state::working(n) as u32 * 100_000
                 + n.live as u32 * 10_000
                 + self.subagents[b]
         };
-        order.sort_by_key(|&b| std::cmp::Reverse(prio(b)));
+        order.sort_by_key(|&b| Reverse(prio(b)));
         for &b in order.iter().rev() {
             let n = &g.nodes[self.node_of[b]];
             let agent = n.kind == NodeKind::Agent;
@@ -811,7 +815,7 @@ impl Render for MapView {
                 _ => (mix(pc, rgb(0x0b0c12), 0.22), pc, 1.4, true),
             };
             let selected = Some(n.id.as_str()) == self.selected.as_deref();
-            if working(n) && !dim(b) {
+            if state::working(n) && !dim(b) {
                 scene.circles.push(Circle {
                     center: c,
                     radius: r + 9.0 * k.max(0.6) * (1.0 + 0.35 * breath),
@@ -844,7 +848,7 @@ impl Render for MapView {
                 scene.circles.push(Circle {
                     center: dc,
                     radius: dr,
-                    fill: alpha(if working(n) { amber() } else { green() }, op),
+                    fill: alpha(if state::working(n) { amber() } else { green() }, op),
                     stroke: alpha(bg(), op),
                     width: 2.5,
                     dashed: false,
@@ -852,7 +856,7 @@ impl Render for MapView {
             }
             if !agent
                 && let (o, Some(icon)) = (crate::state::origin(n), crate::state::origin(n).icon())
-                && o != crate::state::Origin::Here
+                && o != Origin::Here
             {
                 // On the lower right edge, mostly outside: small bubbles stay visible.
                 let br = (r * 0.36).max(5.0);
@@ -935,8 +939,8 @@ impl Render for MapView {
                 centered: true,
                 weight: if n.live { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM },
             });
-            if in_focus && let Some(m) = n.now.as_ref().filter(|_| working(n)) {
-                let line: SharedString = clip(&format!("⟳ {} · {}", tool_name(&m.tool), m.detail), 44).into();
+            if in_focus && let Some(m) = n.now.as_ref().filter(|_| state::working(n)) {
+                let line: SharedString = clip(&format!("⟳ {} · {}", state::tool_name(&m.tool), m.detail), 44).into();
                 scene.labels.push(Label {
                     at: point(c.x, rect.origin.y + px(h)),
                     text: line,
@@ -977,7 +981,7 @@ impl Render for MapView {
             let mut seen = HashSet::new();
             for b in 0..self.node_of.len() {
                 let n = &g.nodes[self.node_of[b]];
-                if !is_session(n) || !seen.insert(n.project.clone()) || self.sim.bodies[b].ring {
+                if !state::is_session(n) || !seen.insert(n.project.clone()) || self.sim.bodies[b].ring {
                     continue;
                 }
                 let (ax, ay) = self.sim.bodies[b].anchor;
@@ -1018,7 +1022,7 @@ impl Render for MapView {
         }
 
         let canvas_bounds = self.canvas.clone();
-        let tip = self.hover.map(|b| node_tip(&g.nodes[self.node_of[b]], self.mouse - self.canvas.get().origin, now));
+        let tip = self.hover.map(|b| state::node_tip(&g.nodes[self.node_of[b]], self.mouse - self.canvas.get().origin, now));
 
         // The id stays the English name whatever the language.
         let titles_seg = |id: &'static str, label: String, mode: Titles| {
@@ -1147,7 +1151,7 @@ impl Render for MapView {
 }
 
 fn legend() -> Div {
-    let item = |swatch: Div, label: std::borrow::Cow<str>| div().flex().items_center().gap(px(7.0)).child(swatch).child(label.into_owned());
+    let item = |swatch: Div, label: Cow<str>| div().flex().items_center().gap(px(7.0)).child(swatch).child(label.into_owned());
     let ring = |c: Rgba, dashed: bool| div().size(px(10.0)).rounded_full().border_1().border_color(c).when(dashed, |d| d.border_dashed());
     let bar = |c: Rgba| div().w(px(14.0)).h(px(2.0)).bg(c);
     let badge = |icon: IconName| {

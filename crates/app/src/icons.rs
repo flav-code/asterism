@@ -1,7 +1,7 @@
 //! Pictures: app icons from their bundles, and a few line icons (Lucide, built into the binary).
 use gpui_kit::assets::IconName;
 use gpui_kit::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 gpui_kit::assets::icon_assets!(pub Icons, [Cpu, MemoryStick, Download, Languages, Server, Laptop, Cloud, Clock, Settings]);
 
@@ -16,7 +16,7 @@ pub fn line(name: IconName, color: Rgba, size: f32) -> Svg {
 pub fn app_icon_png(bundle: &str) -> Option<Vec<u8>> {
     let resources = Path::new(bundle).join("Contents/Resources");
     let plist = std::fs::read(Path::new(bundle).join("Contents/Info.plist")).unwrap_or_default();
-    let mut icns: Vec<(std::path::PathBuf, u64)> = std::fs::read_dir(&resources)
+    let mut icns: Vec<(PathBuf, u64)> = std::fs::read_dir(&resources)
         .ok()?
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "icns"))

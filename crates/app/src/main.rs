@@ -25,6 +25,7 @@ mod update;
 rust_i18n::i18n!("../../locales", fallback = "en");
 
 use asterism_core::{Monitor, Report};
+use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::*;
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,7 +94,7 @@ fn main() {
             }
         }
         // The inputs and other components follow the window's dark palette, not the system's light one.
-        gpui_kit::component::theme::Theme::change(gpui_kit::component::theme::ThemeMode::Dark, None, cx);
+        Theme::change(ThemeMode::Dark, None, cx);
         // Snapshot builds can open at another size (MDB_WINDOW=900x700), to check the layout narrow.
         let (w, h) = std::env::var("MDB_WINDOW")
             .ok()

@@ -1,13 +1,14 @@
 //! The Machine tab: the machine at the top, who uses it on the left, the agent sessions on the right.
 use crate::glide::Glide;
 use crate::icons;
-use crate::state::norm;
+use crate::seg::Seg;
+use crate::state;
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::Report;
 use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionView};
 use asterism_core::host::Pressure;
-use asterism_core::i18n::count;
+use asterism_core::i18n;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
@@ -16,6 +17,8 @@ use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "snapshot")]
+use std::time::Instant;
 use tokio::sync::watch;
 
 /// How long a session's details take to grow or shrink.
@@ -43,7 +46,7 @@ pub struct MachineView {
     clicks: HashMap<String, u32>,
     by_cpu: bool,
     owners_scroll: Glide,
-    sort_seg: crate::seg::Seg,
+    sort_seg: Seg,
     sessions_scroll: Glide,
     /// Each column's search: the apps on the left, the sessions on the right.
     apps_search: Entity<InputState>,
@@ -93,7 +96,7 @@ impl MachineView {
             clicks: HashMap::new(),
             by_cpu: false,
             owners_scroll: Glide::default(),
-            sort_seg: crate::seg::Seg::default(),
+            sort_seg: Seg::default(),
             sessions_scroll: Glide::default(),
             apps_search,
             sessions_search,
@@ -297,9 +300,9 @@ impl MachineView {
                     other = bytes(vm.other_mem)
                 )
                 .into_owned())),
-                None => {
-                    tile(None, "Docker").child(big(bytes(d.containers_mem))).child(sub(count("view.containers_n", d.containers as u64)))
-                }
+                None => tile(None, "Docker")
+                    .child(big(bytes(d.containers_mem)))
+                    .child(sub(i18n::count("view.containers_n", d.containers as u64))),
             };
             row = row.child(docker);
         }
@@ -317,8 +320,8 @@ impl MachineView {
         // "System" stays English in the data (it keys the trend and the id): only its label is translated.
         let label = |o: &Owner| if o.kind == OwnerKind::System { t!("core.system").into_owned() } else { o.name.clone() };
         let typed = self.apps_search.read(cx).value();
-        let q = norm(typed.trim());
-        owners.retain(|o| norm(&label(o)).contains(&q));
+        let q = state::norm(typed.trim());
+        owners.retain(|o| state::norm(&label(o)).contains(&q));
         let kind_color = |k: OwnerKind| match k {
             OwnerKind::Session => blue(),
             OwnerKind::Docker => cyan(),
@@ -463,7 +466,7 @@ impl MachineView {
                     .items_center()
                     .gap(px(6.))
                     .pl(px(16.))
-                    .when(!s.builds.is_empty(), |d| d.child(chip(count("view.builds_n", s.builds.len() as u64), amber())))
+                    .when(!s.builds.is_empty(), |d| d.child(chip(i18n::count("view.builds_n", s.builds.len() as u64), amber())))
                     .when(!s.groups.is_empty(), |d| d.child(chip(docker_line, cyan())))
                     .when(no_limit > 0, |d| d.child(chip(t!("view.no_limit").into_owned(), red()))),
             );
@@ -531,14 +534,14 @@ impl MachineView {
             );
         }
         if s.more > 0 {
-            d = d.child(div().text_size(px(11.)).text_color(faint()).child(count("view.more_processes", s.more as u64)));
+            d = d.child(div().text_size(px(11.)).text_color(faint()).child(i18n::count("view.more_processes", s.more as u64)));
         }
         d
     }
 
     fn sessions(&self, r: &Report, cx: &mut Context<Self>) -> impl IntoElement {
         let typed = self.sessions_search.read(cx).value();
-        let q = norm(typed.trim());
+        let q = state::norm(typed.trim());
         let mut sessions: Vec<&SessionView> = r.sessions.iter().filter(|s| session_matches(s, &q)).collect();
         if self.by_cpu {
             sessions.sort_by(|a, b| (b.cpu + b.docker_cpu).total_cmp(&(a.cpu + a.docker_cpu)));
@@ -585,7 +588,7 @@ impl MachineView {
         {
             self.snapshot_taken = true;
             self.toggle(&s.id.clone(), cx);
-            frames(window, dir, std::time::Instant::now(), 0);
+            frames(window, dir, Instant::now(), 0);
             return;
         }
         let Ok(path) = std::env::var("MDB_SNAPSHOT") else { return };
@@ -614,7 +617,7 @@ impl MachineView {
 
 /// Saves `<dir>/frame-<ms>.png` at 0, ¼, ½, ¾ and past the end of the unfolding, then quits.
 #[cfg(feature = "snapshot")]
-fn frames(window: &mut Window, dir: String, start: std::time::Instant, next: usize) {
+fn frames(window: &mut Window, dir: String, start: Instant, next: usize) {
     const MARKS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.2];
     window.on_next_frame(move |window, cx| {
         let mut next = next;
@@ -647,13 +650,13 @@ fn no_match(said: String) -> Div {
 
 /// Whether a session shows this text (already through `norm`): in its title, its project or its containers' line.
 fn session_matches(s: &SessionView, q: &str) -> bool {
-    let has = |t: &str| norm(t).contains(q);
+    let has = |t: &str| state::norm(t).contains(q);
     has(&s.title) || has(&s.project) || s.groups.iter().any(|g| has(&g.name) || has(&g.kind))
 }
 
 /// Whether a group of containers no session owns shows this text: its name or one of its containers'.
 fn group_matches(g: &GroupView, q: &str) -> bool {
-    let has = |t: &str| norm(t).contains(q);
+    let has = |t: &str| state::norm(t).contains(q);
     has(&g.name) || has(&g.kind) || g.containers.iter().any(|c| has(&c.name))
 }
 
@@ -667,7 +670,7 @@ fn group(g: &GroupView) -> Div {
     let why = match (g.why, g.shared) {
         (Some("client"), _) => t!("view.why.client").into_owned(),
         (Some(_), _) => g.dir.as_ref().map_or(t!("view.why.folder"), |d| t!("view.why.mounts", dir = d)).into_owned(),
-        (None, n) if n > 0 => count("view.why.shared", n as u64),
+        (None, n) if n > 0 => i18n::count("view.why.shared", n as u64),
         _ => t!("view.why.none").into_owned(),
     };
     div()

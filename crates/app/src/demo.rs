@@ -3,6 +3,7 @@
 //! so screenshots show the shape of real work without saying what it is.
 use asterism_core::graph::{Graph, NodeKind};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Titles are a verb and a thing: 12 × 30 = 360 different ones, so sessions rarely share one.
@@ -48,7 +49,7 @@ const SAYS: &[&str] =
     &["Status update", "Review done, two comments", "Tests pass", "Need a decision on the schema", "Merged", "Found the cause"];
 
 fn pick<'a>(list: &'a [&'a str], key: &str) -> &'a str {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     key.hash(&mut h);
     list[(h.finish() % list.len() as u64) as usize]
 }

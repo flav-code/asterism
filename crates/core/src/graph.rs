@@ -1,17 +1,18 @@
 //! The session map: every session (desktop, terminal, subagent, or only named by a message), who started or forked
 //! whom, and every message they sent each other. Plus token usage over every transcript, read in the background.
-use crate::desktop::DesktopSession;
-use crate::sessions::project_of;
+use crate::desktop::{DesktopSession, DesktopStore};
+use crate::sessions;
 use crate::transcripts::{Move, Transcripts};
-use crate::usage::{Biggest, DayKey, HourKey, PRICES, Totals, Usage, family, model_id};
+use crate::usage::{self, Biggest, DayKey, HourKey, PRICES, Totals, Usage};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Before the full scan is done, transcripts of sessions idle for longer than this are not read.
 const SCAN_DAYS: u64 = 14;
@@ -194,6 +195,7 @@ fn fam_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Err
 }
 
 /// `to` shapes: `local_<uuid>`, `uds:<socket>`, `bridge:<id>`, `a<16 hex>` (a subagent), `<title>` or `<title> [hex6]`.
+#[must_use]
 pub fn resolve_target(to: &str, by_socket: &HashMap<String, String>, by_title: &HashMap<String, String>) -> Option<String> {
     let hex = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
     if let Some(rest) = to.strip_prefix("local_")
@@ -386,7 +388,7 @@ impl Visualizer {
             }
         }
         if !self.ready {
-            all.sort_by_cached_key(|f| std::cmp::Reverse(modified_ms(f)));
+            all.sort_by_cached_key(|f| Reverse(modified_ms(f)));
             self.total_bytes = all.iter().map(|f| fs::metadata(f).map_or(0, |m| m.len())).sum();
         }
         self.all = all;
@@ -412,6 +414,8 @@ impl Visualizer {
         self.usage.trim_minutes(now_ms);
     }
 
+    /// The map now: a node per session and subagent, the edges between them and their messages. `live` holds the pids
+    /// of the sessions that run.
     pub fn build(&mut self, home: &Path, desktop: &[DesktopSession], live: &HashSet<u32>, now_ms: u64) -> Graph {
         self.list(home);
         let mut nodes: HashMap<String, Node> = HashMap::new();
@@ -427,7 +431,7 @@ impl Visualizer {
 
         for d in desktop {
             let mut n = node(&d.id, NodeKind::Desktop, if d.title.is_empty() { &untitled } else { &d.title }, "");
-            n.project = project_of(d.origin_cwd.as_deref().or(d.cwd.as_deref()).unwrap_or("?"));
+            n.project = sessions::project_of(d.origin_cwd.as_deref().or(d.cwd.as_deref()).unwrap_or("?"));
             (n.cwd, n.created_at, n.last_at, n.archived) = (d.cwd.clone(), d.created_at, d.last_activity_at, d.archived);
             n.machine = d.ssh.clone().unwrap_or_default();
             (n.model, n.profile, n.branch, n.turns, n.scheduled) =
@@ -476,7 +480,7 @@ impl Visualizer {
                     &id,
                     NodeKind::Cli,
                     r.names.first().map_or(&*cli_title, String::as_str),
-                    &project_of(r.cwd.as_deref().unwrap_or("?")),
+                    &sessions::project_of(r.cwd.as_deref().unwrap_or("?")),
                 );
                 (n.cwd, n.created_at, n.last_at) = (r.cwd.clone(), r.started, r.updated);
                 n
@@ -512,7 +516,7 @@ impl Visualizer {
                 continue;
             }
             let title = st.title.clone().or_else(|| st.prompt.clone()).unwrap_or_else(|| cli_title.to_string());
-            let mut n = node(&nid, NodeKind::Cli, &title, &project_of(st.cwd.as_deref().unwrap_or("?")));
+            let mut n = node(&nid, NodeKind::Cli, &title, &sessions::project_of(st.cwd.as_deref().unwrap_or("?")));
             (n.cwd, n.created_at, n.last_at) = (st.cwd.clone(), st.started, st.modified.max(st.started));
             order.push(nid.clone());
             nodes.insert(nid.clone(), n);
@@ -541,7 +545,7 @@ impl Visualizer {
         let mut messages: Vec<Msg> = Vec::new();
         // Open and recent sessions first, so what the map shows first fills in first.
         let mut first: Vec<String> = order.clone();
-        first.sort_by_key(|id| std::cmp::Reverse((nodes[id].live, nodes[id].last_at)));
+        first.sort_by_key(|id| Reverse((nodes[id].live, nodes[id].last_at)));
         for id in first {
             let (is_live, last_at) = (nodes[&id].live, nodes[&id].last_at);
             if !is_live && last_at < cutoff {
@@ -702,8 +706,8 @@ impl Visualizer {
             .map(|(DayKey { day, model, agent }, t)| {
                 // What the cache saved: its reads, at the input price minus the cache read price.
                 let saved =
-                    PRICES.iter().find(|p| p.model == model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.input - p.cache_read) / 1e6);
-                DayRow { d: day.clone(), model: model.clone(), fam: family(model), agent: *agent, t: *t, saved }
+                    PRICES.iter().find(|p| p.model == usage::model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.input - p.cache_read) / 1e6);
+                DayRow { d: day.clone(), model: model.clone(), fam: usage::family(model), agent: *agent, t: *t, saved }
             })
             .collect();
         let hours = u.hour.iter().map(|(HourKey { hour, fam }, t)| HourRow { h: hour.clone(), fam, t: *t }).collect();
@@ -726,7 +730,7 @@ impl Visualizer {
                         .unwrap_or_else(|| uuid.chars().take(8).collect());
                     // The session's own folder, not a subagent's (which may work elsewhere).
                     let cwd = ost.and_then(|o| o.tokens.cwd.as_deref()).or(st.tokens.cwd.as_deref());
-                    let project = project_of(cwd.unwrap_or("?"));
+                    let project = sessions::project_of(cwd.unwrap_or("?"));
                     Titled { title, project, kind: NodeKind::Cli }
                 });
                 SessionUsage { id, title, project, kind, days: BTreeMap::new() }
@@ -742,7 +746,7 @@ impl Visualizer {
             }
         }
         let mut tools: Vec<(String, u64)> = u.tools.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        tools.sort_by_key(|t| std::cmp::Reverse(t.1));
+        tools.sort_by_key(|t| Reverse(t.1));
         tools.truncate(14);
         UsageView {
             ready: self.ready,
@@ -766,14 +770,14 @@ impl Visualizer {
 /// every 2 s. `send` gets each map with the latest usage, and returns false to stop.
 pub fn follow(home: &Path, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> bool) {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let (mut store, mut viz) = (crate::desktop::DesktopStore::default(), Visualizer::default());
+    let (mut store, mut viz) = (DesktopStore::default(), Visualizer::default());
     let mut sys = System::new().expect("sysinfo supports this OS");
     let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
     loop {
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
         let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
         let desktop = store.refresh(home);
-        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         let graph = viz.build(home, &desktop, &live, now);
         if viz.usage.version != usage_version {
             (usage, usage_version) = (Arc::new(viz.usage_view()), viz.usage.version);
@@ -781,12 +785,13 @@ pub fn follow(home: &Path, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> b
         if !send(Arc::new(graph), usage.clone()) {
             break;
         }
-        std::thread::sleep(if usage.ready { std::time::Duration::from_secs(2) } else { std::time::Duration::from_millis(16) });
+        std::thread::sleep(if usage.ready { Duration::from_secs(2) } else { Duration::from_millis(16) });
     }
 }
 
 /// This computer's map with those of other machines, each named: their sessions carry the machine's name. A session
 /// already on the map stays once (the same machine added twice, or this one).
+#[must_use]
 pub fn merge_graphs(local: &Graph, others: &[(&str, &Graph)]) -> Graph {
     let mut g = local.clone();
     let mut ids: HashSet<String> = g.nodes.iter().map(|n| n.id.clone()).collect();
@@ -813,6 +818,7 @@ pub fn merge_graphs(local: &Graph, others: &[(&str, &Graph)]) -> Graph {
 }
 
 /// This computer's token usage with that of other machines.
+#[must_use]
 pub fn merge_usage(local: &UsageView, others: &[&UsageView]) -> UsageView {
     let mut u = local.clone();
     for &ou in others {

@@ -48,6 +48,7 @@ impl Default for Monitor {
 }
 
 impl Monitor {
+    /// Looks at the machine once: its processes, sessions and containers, attributed.
     pub async fn sample(&mut self) -> Report {
         let procs = self.host.processes();
         let host = self.host.host();

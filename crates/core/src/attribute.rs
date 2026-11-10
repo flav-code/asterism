@@ -3,9 +3,10 @@
 use crate::docker::{COMPOSE_DIR, COMPOSE_FILES, COMPOSE_PROJECT, Container, DockerInfo, GROUP_LABELS};
 use crate::host::{Host, Proc};
 use crate::sessions::{Activity, SessionMeta};
-use crate::text::{add_dirs, is_claude, is_docker_cli, is_heavy, is_shown_build, readable, redact, resume_of, short_program};
+use crate::text;
 use rust_i18n::t;
 use serde::Serialize;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 /// Processes that hold a Docker engine's virtual machine, as the OS sees them. Edit freely.
@@ -215,6 +216,7 @@ pub struct Claim {
 }
 
 /// One spelling per folder: forward slashes, no trailing slash, Docker Desktop's host prefixes removed.
+#[must_use]
 pub fn norm_path(p: &str) -> String {
     let mut s = p.replace('\\', "/");
     if let Some(rest) = s.strip_prefix("/host_mnt/") {
@@ -239,6 +241,8 @@ fn inside(p: &str, dir: &str) -> bool {
     p == dir || p.strip_prefix(dir).is_some_and(|r| r.starts_with('/'))
 }
 
+/// Containers in rows: those of one Kubernetes cluster or Compose project together, the others each alone.
+#[must_use]
 pub fn group_containers(containers: Vec<Container>) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -362,6 +366,8 @@ fn is_vm(p: &Proc) -> bool {
         .any(|n| p.name.eq_ignore_ascii_case(n) || file.eq_ignore_ascii_case(n) || file.eq_ignore_ascii_case(&format!("{n}.exe")))
 }
 
+/// Says who uses the machine: each process goes to the agent session that started it, to an app, to Docker or to the
+/// system, and each container to the session that runs it.
 pub fn attribute(inp: Inputs) -> Report {
     let home = norm_path(inp.home);
     let now_s = inp.at / 1000;
@@ -391,7 +397,7 @@ pub fn attribute(inp: Inputs) -> Report {
 
     // Session roots: the outermost `claude` processes (one started by another counts for the outer one).
     let registry: HashMap<u32, usize> = inp.sessions.iter().enumerate().filter_map(|(i, s)| Some((s.pid?, i))).collect();
-    let is_root = |p: &Proc| (registry.contains_key(&p.pid) && p.cmd.to_lowercase().contains("claude")) || is_claude(&p.cmd);
+    let is_root = |p: &Proc| (registry.contains_key(&p.pid) && p.cmd.to_lowercase().contains("claude")) || text::is_claude(&p.cmd);
     let under_root = |p: &Proc| {
         let mut q = by_pid.get(&p.ppid);
         for _ in 0..64 {
@@ -411,14 +417,15 @@ pub fn attribute(inp: Inputs) -> Report {
     let mut lives: Vec<(&Proc, Option<usize>)> = Vec::new();
     let mut lost = Vec::new();
     for p in roots {
-        let found = registry.get(&p.pid).copied().or_else(|| resume_of(&p.cmd).and_then(|id| inp.sessions.iter().position(|s| s.id == id)));
+        let found =
+            registry.get(&p.pid).copied().or_else(|| text::resume_of(&p.cmd).and_then(|id| inp.sessions.iter().position(|s| s.id == id)));
         match found {
             Some(i) if taken.insert(i) => lives.push((p, Some(i))),
             _ => lost.push(p),
         }
     }
     for p in lost {
-        let dirs: Vec<String> = p.cwd.iter().cloned().chain(add_dirs(&p.cmd)).map(|d| norm_path(&d)).collect();
+        let dirs: Vec<String> = p.cwd.iter().cloned().chain(text::add_dirs(&p.cmd)).map(|d| norm_path(&d)).collect();
         let start = p.start * 1000;
         let best = inp
             .sessions
@@ -463,7 +470,7 @@ pub fn attribute(inp: Inputs) -> Report {
         .map(|(root, m)| {
             let m = m.map(|i| &inp.sessions[i]);
             let cwd = m.and_then(|m| m.cwd.clone()).or_else(|| root.cwd.clone());
-            let dirs = cwd.into_iter().chain(add_dirs(&root.cmd)).chain(m.map(|m| m.dirs.clone()).unwrap_or_default()).collect();
+            let dirs = cwd.into_iter().chain(text::add_dirs(&root.cmd)).chain(m.map(|m| m.dirs.clone()).unwrap_or_default()).collect();
             Claim { dirs: clean(dirs), visited: clean(m.map(|m| m.visited.clone()).unwrap_or_default()), clients: Vec::new() }
         })
         .collect();
@@ -530,7 +537,7 @@ pub fn attribute(inp: Inputs) -> Report {
         age: now_s.saturating_sub(p.start),
         heavy,
         detached,
-        cmd: short_program(&redact(&readable(&p.cmd), inp.home, CMD_MAX)),
+        cmd: text::short_program(&text::redact(&text::readable(&p.cmd), inp.home, CMD_MAX)),
     };
     let mut views: Vec<SessionView> = Vec::new();
     // Per session: the docker commands under the process running its current call, whose containers it also costs.
@@ -549,19 +556,19 @@ pub fn attribute(inp: Inputs) -> Report {
                 if owner.get(&pid) != Some(&Own::Session(li)) || depth > 40 {
                     continue;
                 }
-                let heavy = depth > 0 && is_shown_build(&p.cmd);
+                let heavy = depth > 0 && text::is_shown_build(&p.cmd);
                 if heavy && !in_build {
                     let Load { cpu: c, mem: m } = subtree(pid);
                     builds.push(Build {
                         pid: Some(pid),
                         container: None,
-                        cmd: short_program(&redact(&readable(&p.cmd), inp.home, CMD_MAX)),
+                        cmd: text::short_program(&text::redact(&text::readable(&p.cmd), inp.home, CMD_MAX)),
                         cpu: c,
                         mem: m,
                         age: now_s.saturating_sub(p.start),
                     });
                 }
-                if depth > 0 && is_docker_cli(&p.cmd) {
+                if depth > 0 && text::is_docker_cli(&p.cmd) {
                     clients.push(p.cmd.clone());
                 }
                 rows.push(row(p, depth, is_detached && depth == 0, heavy));
@@ -576,17 +583,17 @@ pub fn attribute(inp: Inputs) -> Report {
         let activity = meta.filter(|s| s.status.as_deref() != Some("idle")).and_then(|s| inp.activities.get(&s.id)).map(|a| {
             // The Bash call's process, as `readable` shows it: "$ <command>".
             let runner = a.command.as_deref().and_then(|cmd| {
-                rows.iter().find(|r| by_pid.get(&r.pid).is_some_and(|p| readable(&p.cmd).strip_prefix("$ ") == Some(cmd.trim())))
+                rows.iter().find(|r| by_pid.get(&r.pid).is_some_and(|p| text::readable(&p.cmd).strip_prefix("$ ") == Some(cmd.trim())))
             });
             let sums = runner.map(|r| subtree(r.pid));
             let mut stack: Vec<u32> = runner.map(|r| r.pid).into_iter().collect();
             while let Some(q) = stack.pop() {
-                clients_now.extend(by_pid.get(&q).filter(|p| is_docker_cli(&p.cmd)).map(|p| p.cmd.clone()));
+                clients_now.extend(by_pid.get(&q).filter(|p| text::is_docker_cli(&p.cmd)).map(|p| p.cmd.clone()));
                 stack.extend(kids.get(&q).into_iter().flatten().map(|k| k.pid));
             }
             ActivityView {
                 tool: a.tool.clone(),
-                detail: redact(&a.detail, inp.home, 200),
+                detail: text::redact(&a.detail, inp.home, 200),
                 since: a.since,
                 pid: runner.map(|r| r.pid),
                 cpu: sums.map(|s| s.cpu),
@@ -635,14 +642,14 @@ pub fn attribute(inp: Inputs) -> Report {
                 id: c.id.chars().take(12).collect(),
                 name: c.name.clone(),
                 image: c.image.clone(),
-                cmd: redact(&c.cmd, inp.home, CMD_MAX),
+                cmd: text::redact(&c.cmd, inp.home, CMD_MAX),
                 cpu: c.cpu,
                 mem: c.mem,
                 cpus: c.cpus,
                 mem_limit: c.mem_limit,
                 unlimited: c.cpus == 0.0 && c.mem_limit == 0,
                 age: if c.started > 0 { now_s.saturating_sub(c.started) } else { 0 },
-                heavy: is_heavy(&c.cmd),
+                heavy: text::is_heavy(&c.cmd),
             })
             .collect(),
     };
@@ -725,7 +732,7 @@ pub fn attribute(inp: Inputs) -> Report {
     }
     owners.retain(|o| o.mem > 0 || o.cpu > 0.0);
     owners.sort_by(|a, b| b.mem.cmp(&a.mem).then(b.cpu.total_cmp(&a.cpu)));
-    views.sort_by_key(|s| std::cmp::Reverse(s.mem + s.docker_mem));
+    views.sort_by_key(|s| Reverse(s.mem + s.docker_mem));
 
     let containers_mem: u64 = containers.iter().map(|c| c.mem).sum();
     let docker = (inp.docker.is_some() || !containers.is_empty()).then(|| DockerView {

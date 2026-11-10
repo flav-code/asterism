@@ -4,11 +4,12 @@
 //! (`asterism_core::remote`). It is copied there over the same connection the first time and for each new version,
 //! into ~/.cache/asterism; nothing else on the machine changes.
 use crate::settings::Machine;
-use asterism_core::graph::{Graph, UsageView, merge_graphs, merge_usage};
+use asterism_core::graph::{self, Graph, UsageView};
 use asterism_core::remote::{Frame, Mirror};
 use rust_i18n::t;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -132,7 +133,7 @@ pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) 
     names.sort();
     let graphs: Vec<(&str, &Graph)> = names.iter().filter_map(|n| Some((n.as_str(), &**remotes[*n].graph.as_ref()?))).collect();
     let usages: Vec<&Arc<UsageView>> = names.iter().filter_map(|n| remotes[*n].usage.as_ref()).collect();
-    let g = if graphs.is_empty() { g } else { Arc::new(merge_graphs(&g, &graphs)) };
+    let g = if graphs.is_empty() { g } else { Arc::new(graph::merge_graphs(&g, &graphs)) };
     if usages.is_empty() {
         return (g, u);
     }
@@ -140,7 +141,7 @@ pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) 
     let mut cache = locked(&USAGE);
     if cache.made_of != key || cache.usage.is_none() {
         let others: Vec<&UsageView> = usages.iter().map(|u| &***u).collect();
-        *cache = Merged { made_of: key, usage: Some(Arc::new(merge_usage(&u, &others))) };
+        *cache = Merged { made_of: key, usage: Some(Arc::new(graph::merge_usage(&u, &others))) };
     }
     (g, cache.usage.clone().expect("set above"))
 }
@@ -308,7 +309,7 @@ fn install(target: &str, os: &str, arch: &str) -> Result<(), String> {
 fn agent_binary(arch: &str) -> Result<Vec<u8>, String> {
     let name = format!("asterism-agent-{VERSION}-linux-{arch}");
     if let Ok(dir) = std::env::var("ASTERISM_AGENT_DIR") {
-        return std::fs::read(std::path::Path::new(&dir).join(&name)).map_err(|e| format!("{name}: {e}"));
+        return std::fs::read(Path::new(&dir).join(&name)).map_err(|e| format!("{name}: {e}"));
     }
     let kept = crate::settings::data_dir().join("agents").join(&name);
     if let Ok(bytes) = std::fs::read(&kept) {

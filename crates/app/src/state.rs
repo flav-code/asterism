@@ -1,6 +1,7 @@
 //! What the views share: the filters, and which sessions, links and messages they let through.
 use crate::ui::*;
 use asterism_core::graph::{Graph, Node, NodeKind};
+use gpui_kit::assets::IconName;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
@@ -65,8 +66,7 @@ pub fn origin(n: &Node) -> Origin {
 }
 
 impl Origin {
-    pub fn icon(self) -> Option<gpui_kit::assets::IconName> {
-        use gpui_kit::assets::IconName;
+    pub fn icon(self) -> Option<IconName> {
         match self {
             Origin::Here => Some(IconName::Laptop),
             Origin::Machine => Some(IconName::Server),

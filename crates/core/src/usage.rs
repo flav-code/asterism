@@ -35,6 +35,7 @@ pub const PRICES: &[Price] = &[
 ];
 
 /// "claude-opus-4-8[1m]" or "claude-haiku-4-5-20251001" → the priced id.
+#[must_use]
 pub fn model_id(m: &str) -> &str {
     let m = m.split('[').next().unwrap_or(m);
     match m.rsplit_once('-') {
@@ -43,6 +44,8 @@ pub fn model_id(m: &str) -> &str {
     }
 }
 
+/// A model's family ("Opus", "Sonnet"…), "Other" for one that is none of them.
+#[must_use]
 pub fn family(m: &str) -> &'static str {
     match m {
         m if m.contains("fable") || m.contains("mythos") => "Fable",
@@ -83,11 +86,13 @@ pub struct Totals {
 }
 
 impl Totals {
+    /// Adds `r` to these totals.
     pub fn add(&mut self, r: &Totals) {
         (self.i, self.o, self.cr, self.cw, self.n, self.usd) =
             (self.i + r.i, self.o + r.o, self.cr + r.cr, self.cw + r.cw, self.n + r.n, self.usd + r.usd);
     }
     /// Every token the model processed.
+    #[must_use]
     pub fn all(&self) -> u64 {
         self.i + self.o + self.cr + self.cw
     }
@@ -147,6 +152,7 @@ pub struct Usage {
     pub version: u64,
 }
 
+/// The local day of a moment, "YYYY-MM-DD".
 pub fn day_key(ms: u64) -> String {
     Local.timestamp_millis_opt(ms as i64).single().map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string())
 }

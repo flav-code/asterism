@@ -4,7 +4,9 @@ use crate::graph::{DayRow, Edge, Graph, HourRow, Msg, Node, SessionUsage, UsageV
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// What a patch tells items apart by.
 pub trait Keyed {
+    /// The item's key: the same item keeps it from one frame to the next.
     fn key(&self) -> String;
 }
 
@@ -53,6 +55,7 @@ impl<T: Keyed> Patch<T> {
         self.set.is_empty() && self.del.is_empty()
     }
 
+    /// Brings `list` up to date: drops the keys gone, replaces the items changed, adds the new ones at the end.
     pub fn apply(self, list: &mut Vec<T>) {
         if !self.del.is_empty() {
             let del: HashSet<String> = self.del.into_iter().collect();
@@ -125,11 +128,13 @@ pub struct Sender {
 }
 
 impl Sender {
+    /// The frame that brings the other side's map to `g`; none when nothing changed since the last one.
     pub fn map(&mut self, g: &Graph) -> Option<Frame> {
         let (nodes, edges, messages) = (self.nodes.diff(&g.nodes), self.edges.diff(&g.edges), self.messages.diff(&g.messages));
         (!(nodes.is_empty() && edges.is_empty() && messages.is_empty())).then_some(Frame::Map { nodes, edges, messages })
     }
 
+    /// The frame that brings the other side's usage to `u`; none when nothing changed since the last one.
     pub fn usage(&mut self, u: &UsageView) -> Option<Frame> {
         let (days, hours, sessions) = (self.days.diff(&u.days), self.hours.diff(&u.hours), self.sessions.diff(&u.sessions));
         let rest = UsageView { days: Vec::new(), hours: Vec::new(), sessions: Vec::new(), ..u.clone() };
@@ -150,6 +155,7 @@ pub struct Mirror {
 }
 
 impl Mirror {
+    /// Takes one frame in.
     pub fn apply(&mut self, frame: Frame) {
         match frame {
             Frame::Asterism(_) => {}

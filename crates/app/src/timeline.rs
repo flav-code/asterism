@@ -2,7 +2,7 @@
 //! runs from its start to its last activity, its subagents under the bar, and messages between sessions are arcs.
 //! The wheel scrolls the rows; with ⌘, ctrl or alt it zooms the time; dragging moves the time.
 use crate::glide::{self, Glide};
-use crate::state::{Filters, Visible, is_session, node_tip, project_colors, visible, working};
+use crate::state::{self, Filters, Origin, Visible};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::graph::{EdgeKind, Graph, MsgKind, NodeKind};
@@ -12,6 +12,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
 use std::cell::Cell;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -122,7 +123,7 @@ impl TimelineView {
             loop {
                 cx.background_executor().timer(Duration::from_millis(83)).await;
                 let alive = this.update(cx, |t, cx| {
-                    let moving = t.layout.rows.iter().any(|r| t.graph.as_ref().is_some_and(|g| working(&g.nodes[r.node])));
+                    let moving = t.layout.rows.iter().any(|r| t.graph.as_ref().is_some_and(|g| state::working(&g.nodes[r.node])));
                     if t.active && (moving || !t.fresh.is_empty() || t.last_paint.elapsed() > Duration::from_secs(5)) {
                         cx.notify();
                     }
@@ -157,10 +158,10 @@ impl TimelineView {
     }
 
     pub fn set_graph(&mut self, g: Arc<Graph>, filters: &Filters, cx: &mut Context<Self>) {
-        let v = visible(&g, filters, now_ms());
+        let v = state::visible(&g, filters, now_ms());
         let index: HashMap<&str, usize> = g.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
         // Spawned and forked sessions go under their parent, oldest first; the others newest first.
-        let sessions: HashSet<usize> = v.nodes.iter().copied().filter(|&i| is_session(&g.nodes[i])).collect();
+        let sessions: HashSet<usize> = v.nodes.iter().copied().filter(|&i| state::is_session(&g.nodes[i])).collect();
         let (mut parent, mut kids): (HashMap<usize, usize>, HashMap<usize, Vec<usize>>) = Default::default();
         for e in g.edges.iter().filter(|e| matches!(e.kind, EdgeKind::Spawn | EdgeKind::Fork)) {
             if let (Some(&a), Some(&b)) = (index.get(e.from.as_str()), index.get(e.to.as_str()))
@@ -186,7 +187,7 @@ impl TimelineView {
             }
         }
         let mut roots: Vec<usize> = sessions.iter().copied().filter(|i| !parent.contains_key(i)).collect();
-        roots.sort_by_key(|&i| std::cmp::Reverse(g.nodes[i].created_at));
+        roots.sort_by_key(|&i| Reverse(g.nodes[i].created_at));
         let mut all: Vec<usize> = sessions.iter().copied().collect();
         all.sort_unstable();
         for i in roots.into_iter().chain(all) {
@@ -230,7 +231,7 @@ impl TimelineView {
             .filter_map(|&m| Some(RowMsg { msg: m, from: row(&g.messages[m].from)?, to: row(&g.messages[m].to)? }))
             .filter(|m| m.from != m.to)
             .collect();
-        self.colors = project_colors(&g);
+        self.colors = state::project_colors(&g);
         self.layout = Rc::new(Layout { rows, row_of, agents, links, msgs });
         (self.graph, self.v) = (Some(g), Some(v));
         // The hover holds indices into the last graph: find what is under the mouse in this one.
@@ -588,7 +589,7 @@ impl Render for TimelineView {
                             0.55
                         };
                         rect(window, x0, cy(r) - 5.0, (x1 - x0).max(3.0), 10.0, o, alpha(color(i), a));
-                        if working(n) {
+                        if state::working(n) {
                             let xs = s.at(if n.status_at > 0 { n.status_at } else { now } as f64) - 2.0;
                             let xe = s.at(now as f64);
                             let (x, sw) = (xs.min(xe - 10.0), (xe - xs + 2.0).max(10.0));
@@ -702,7 +703,7 @@ impl Render for TimelineView {
                         rect(window, 0.0, y, w, ROW, o, t);
                     }
                     let dx = 14.0 + depth as f32 * 14.0;
-                    let dot_color = if working(n) {
+                    let dot_color = if state::working(n) {
                         amber()
                     } else if n.live {
                         green()
@@ -732,7 +733,7 @@ impl Render for TimelineView {
                     }
                     // Not on this computer: where it runs, before its title.
                     let place = crate::state::origin(n);
-                    if let Some(icon) = place.icon().filter(|_| place != crate::state::Origin::Here) {
+                    if let Some(icon) = place.icon().filter(|_| place != Origin::Here) {
                         let ib = Bounds::new(at(tx, cy(r) - 5.0), size(px(10.0), px(10.0)));
                         window.paint_svg(ib, icon.path(), None, TransformationMatrix::unit(), muted().into(), cx).ok();
                         (tx, room) = (tx + 14.0, room.saturating_sub(2));
@@ -757,7 +758,7 @@ impl Render for TimelineView {
             let top_left = point(self.chart.get().origin.x, self.scroll.handle.bounds().top() - px(AXIS));
             let pos = self.mouse - top_left;
             match h {
-                Hover::Node(i) => node_tip(&g.nodes[i], pos, now),
+                Hover::Node(i) => state::node_tip(&g.nodes[i], pos, now),
                 Hover::Msg(m) => {
                     let msg = &g.messages[m];
                     let title = |id: &str| g.nodes.iter().find(|n| n.id == id).map_or_else(|| id.to_string(), |n| clip(&n.title, 40));

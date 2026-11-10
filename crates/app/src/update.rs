@@ -3,8 +3,10 @@
 //! green arrow; a click installs it and starts the app again. Only an installed app updates (an `.app` bundle on
 //! macOS, the install folder on Windows), never one run from a source checkout.
 use sha2::{Digest, Sha256};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::{Mutex, watch};
@@ -174,7 +176,7 @@ fn check(tx: &watch::Sender<State>) -> Result<(), String> {
     let mut res = agent().get(url).header("User-Agent", &ua).call().map_err(|e| e.to_string())?;
     let total = res.body().content_length().unwrap_or(size).max(1);
     let mut reader = res.body_mut().as_reader();
-    let mut out = std::fs::File::create(&file).map_err(|e| e.to_string())?;
+    let mut out = File::create(&file).map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let (mut buf, mut got) = (vec![0u8; 256 * 1024], 0u64);
     loop {
@@ -210,7 +212,7 @@ pub fn apply(file: &Path) -> Result<(), String> {
         let mount = work.join("mnt");
         std::fs::create_dir_all(&mount).map_err(|e| e.to_string())?;
         let run = |cmd: &str, args: &[&str]| {
-            std::process::Command::new(cmd)
+            Command::new(cmd)
                 .args(args)
                 .status()
                 .map_err(|e| e.to_string())
@@ -229,10 +231,10 @@ pub fn apply(file: &Path) -> Result<(), String> {
             new = new.display(),
             work = work.display(),
         );
-        std::process::Command::new("/bin/sh").args(["-c", &script]).spawn().map_err(|e| e.to_string())?;
+        Command::new("/bin/sh").args(["-c", &script]).spawn().map_err(|e| e.to_string())?;
     } else {
         // The installer waits a moment, installs over this copy silently, then starts Asterism.
-        std::process::Command::new(file).arg("/S").spawn().map_err(|e| e.to_string())?;
+        Command::new(file).arg("/S").spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -1,17 +1,21 @@
 //! The window: a header (counters, tabs, range, search, project, filters, panel, replay) above the tab on screen.
 //! The map and the timeline share a side panel, a live feed and a replay of the range's messages.
 use crate::dash::{DashEvent, DashView};
+use crate::glide::Glide;
 use crate::machine_view::MachineView;
 use crate::map::{MapEvent, MapView};
 use crate::menus::Said;
 use crate::panel::{self, Panel, PanelEvent};
+use crate::seg::Seg;
 use crate::settings::{self, Settings};
-use crate::state::{Filters, RANGES, RangeChoice, is_session, norm, visible, working};
+use crate::state::{self, Filters, RANGES, RangeChoice};
 use crate::timeline::{TimelineEvent, TimelineView};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
-use asterism_core::graph::{Graph, Msg, MsgKind, NodeKind, UsageView};
+use crate::update;
+use asterism_core::graph::{Graph, Msg, MsgKind, Node, NodeKind, UsageView};
 use asterism_core::i18n;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -20,6 +24,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+#[cfg(feature = "snapshot")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
@@ -152,7 +158,7 @@ pub struct Shell {
     /// The height of the feed's lines; its grip changes it, saved once the mouse lets go.
     feed_h: f32,
     feed_resized: bool,
-    feed_scroll: crate::glide::Glide,
+    feed_scroll: Glide,
     project_menu: bool,
     range_menu: bool,
     /// The settings window, and what a check for updates from it found (title, detail, whether it failed).
@@ -169,11 +175,11 @@ pub struct Shell {
     /// again.
     menu_closed: Option<(&'static str, Instant)>,
     menu_opens: u32,
-    menu_scroll: crate::glide::Glide,
-    tab_seg: crate::seg::Seg,
+    menu_scroll: Glide,
+    tab_seg: Seg,
     replay: Option<Replay>,
     /// A newer version: downloading, or ready to install (the arrow at the top right).
-    update: crate::update::State,
+    update: update::State,
     clock_bar: Rc<Cell<Bounds<Pixels>>>,
     _tasks: Vec<Task<()>>,
     _subs: Vec<Subscription>,
@@ -185,7 +191,7 @@ impl Shell {
     pub fn new(
         machine: Entity<MachineView>,
         mut feed: GraphFeed,
-        mut updates: watch::Receiver<crate::update::State>,
+        mut updates: watch::Receiver<update::State>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -216,7 +222,7 @@ impl Shell {
             }),
             cx.subscribe_in(&search, window, |s, input, e: &InputEvent, _, cx| {
                 if let InputEvent::Change = e {
-                    s.filters.query = norm(input.read(cx).value().trim());
+                    s.filters.query = state::norm(input.read(cx).value().trim());
                     s.push(cx);
                 }
             }),
@@ -294,7 +300,7 @@ impl Shell {
             feed_clicks: 0,
             feed_h: saved.feed_h,
             feed_resized: false,
-            feed_scroll: crate::glide::Glide::default(),
+            feed_scroll: Glide::default(),
             project_menu: false,
             range_menu: false,
             settings_open: false,
@@ -307,10 +313,10 @@ impl Shell {
             machine_remove: None,
             menu_closed: None,
             menu_opens: 0,
-            menu_scroll: crate::glide::Glide::default(),
-            tab_seg: crate::seg::Seg::default(),
+            menu_scroll: Glide::default(),
+            tab_seg: Seg::default(),
             replay: None,
-            update: crate::update::State::Idle,
+            update: update::State::Idle,
             clock_bar: Rc::default(),
             _tasks: vec![updates_task, new_version],
             _subs: subs,
@@ -391,24 +397,24 @@ impl Shell {
     /// What changed since the last data: sessions starting or finishing work, new sessions and subagents, messages.
     /// Only what just happened: the history read after launch is not news.
     fn news(&mut self, old: &Graph, new: &Graph) {
-        let before: HashMap<&str, &asterism_core::graph::Node> = old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let before: HashMap<&str, &Node> = old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let now = now_ms();
         let recent = |ts: u64| now.saturating_sub(ts) < 120_000;
         for n in &new.nodes {
             match before.get(n.id.as_str()) {
-                Some(o) if is_session(n) && n.live && o.status != n.status => {
-                    if working(n) && !working(o) {
+                Some(o) if state::is_session(n) && n.live && o.status != n.status => {
+                    if state::working(n) && !state::working(o) {
                         let what = n
                             .now
                             .as_ref()
                             .map_or(What::StartedWorking, |m| What::Data(format!("{} · {}", crate::state::tool_name(&m.tool), m.detail)));
                         self.feed_push(now, amber(), n.title.clone(), what, n.id.clone());
-                    } else if !working(n) && working(o) {
+                    } else if !state::working(n) && state::working(o) {
                         self.feed_push(now, text(), n.title.clone(), What::Finished, n.id.clone());
                     }
                 }
                 Some(_) => {}
-                None if is_session(n) && recent(n.created_at) => {
+                None if state::is_session(n) && recent(n.created_at) => {
                     self.feed_push(n.created_at.max(1), violet(), n.title.clone(), What::NewSession, n.id.clone())
                 }
                 None if n.kind == NodeKind::Agent && recent(n.created_at) => {
@@ -427,7 +433,7 @@ impl Shell {
 
     fn start_replay(&mut self, cx: &mut Context<Self>) {
         let Some(g) = self.graph.clone() else { return };
-        let mut msgs = visible(&g, &self.filters, now_ms()).messages;
+        let mut msgs = state::visible(&g, &self.filters, now_ms()).messages;
         if msgs.is_empty() {
             return;
         }
@@ -581,7 +587,7 @@ impl Shell {
             .relative()
             .child(
                 ctl("range", self.range_menu)
-                    .child(crate::icons::line(gpui_kit::assets::IconName::Clock, muted(), 13.0))
+                    .child(crate::icons::line(IconName::Clock, muted(), 13.0))
                     .child(range_label(range_now))
                     .child(div().text_color(muted()).child("▾"))
                     .on_click(cx.listener(|s, _, _, cx| {
@@ -592,8 +598,8 @@ impl Shell {
             )
             .children(range_menu);
         let stats = self.graph.as_ref().filter(|_| wide).map(|g| {
-            let v = visible(g, &self.filters, now_ms());
-            let sessions = v.nodes.iter().filter(|&&i| is_session(&g.nodes[i])).count();
+            let v = state::visible(g, &self.filters, now_ms());
+            let sessions = v.nodes.iter().filter(|&&i| state::is_session(&g.nodes[i])).count();
             let agents = v.nodes.iter().filter(|&&i| g.nodes[i].kind == NodeKind::Agent).count();
             let messages = v.messages.iter().filter(|&&m| g.messages[m].kind == MsgKind::Message).count();
             let stat = |n: usize, key: &str| {
@@ -614,7 +620,7 @@ impl Shell {
 
         // Projects, the busiest first, in a menu under their button.
         let mut counts: HashMap<&str, usize> = HashMap::new();
-        let sessions = self.graph.iter().flat_map(|g| g.nodes.iter()).filter(|n| is_session(n));
+        let sessions = self.graph.iter().flat_map(|g| g.nodes.iter()).filter(|n| state::is_session(n));
         for n in sessions {
             *counts.entry(n.project.as_str()).or_default() += 1;
         }
@@ -829,7 +835,7 @@ impl Shell {
                 .bg(if ready { rgba(0x4ade801f) } else { panel() })
                 .cursor_pointer()
                 .hover(|s| s.bg(if ready { rgba(0x4ade802e) } else { panel_hi() }))
-                .child(crate::icons::line(gpui_kit::assets::IconName::Download, color, 16.0))
+                .child(crate::icons::line(IconName::Download, color, 16.0))
                 .when(!ready, |d| {
                     d.child(
                         div()
@@ -846,7 +852,7 @@ impl Shell {
                 .tooltip(move |_, cx| cx.new(|_| Tip { title: label.clone(), detail: sub.clone() }).into())
                 .on_click(cx.listener(|s, _, _, cx| {
                     if let State::Ready { file, .. } = &s.update {
-                        match crate::update::apply(file) {
+                        match update::apply(file) {
                             Ok(()) => cx.quit(),
                             Err(e) => eprintln!("update: {e}"),
                         }
@@ -1081,7 +1087,7 @@ impl Shell {
             .border_color(line())
             .cursor_pointer()
             .hover(|s| s.bg(panel_hi()))
-            .child(crate::icons::line(gpui_kit::assets::IconName::Settings, muted(), 15.0))
+            .child(crate::icons::line(IconName::Settings, muted(), 15.0))
             .children(dot.map(|c| div().absolute().top(px(5.0)).right(px(5.0)).size(px(6.0)).rounded_full().bg(c)))
             .tooltip(|_, cx| {
                 cx.new(|_| Tip { title: t!("settings.title").into_owned(), detail: t!("settings.button_sub").into_owned() }).into()
@@ -1118,7 +1124,7 @@ impl Shell {
         (self.update_checking, self.update_answer) = (true, None);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
+            let found = cx.background_executor().spawn(async { update::check_now() }).await;
             this.update(cx, |s, cx| {
                 (s.update_checking, s.update_answer) = (false, Some(crate::menus::checked(found)));
                 cx.notify();
@@ -1208,7 +1214,6 @@ impl Shell {
                 .child(div().text_color(if warning { red() } else { text() }).child(title))
                 .child(div().text_color(muted()).child(detail))
         });
-        use gpui_kit::assets::IconName;
         let page = self.settings_page;
         let pages = [
             (SettingsPage::Language, IconName::Languages, t!("settings.language")),
@@ -1494,8 +1499,8 @@ impl Shell {
     /// Nothing to show: say why, with the one click that brings sessions back.
     fn empty(&self, cx: &mut Context<Self>) -> Option<Div> {
         let g = self.graph.as_ref()?;
-        let v = visible(g, &self.filters, now_ms());
-        if v.nodes.iter().any(|&i| is_session(&g.nodes[i])) {
+        let v = state::visible(g, &self.filters, now_ms());
+        if v.nodes.iter().any(|&i| state::is_session(&g.nodes[i])) {
             return None;
         }
         let (msg, act) = if !self.filters.query.is_empty() {
@@ -1668,7 +1673,8 @@ impl Shell {
         self.snapshot_taken = true;
         // MDB_SELECT: select the first session whose title has this text.
         if let (Ok(want), Some(g)) = (std::env::var("MDB_SELECT"), self.graph.clone())
-            && let Some(n) = g.nodes.iter().filter(|n| is_session(n) && n.title.contains(want.as_str())).max_by_key(|n| (n.live, n.last_at))
+            && let Some(n) =
+                g.nodes.iter().filter(|n| state::is_session(n) && n.title.contains(want.as_str())).max_by_key(|n| (n.live, n.last_at))
         {
             self.select(Some(n.id.clone()), cx);
         }
@@ -1691,7 +1697,7 @@ impl Shell {
             window.on_next_frame(move |window, _| {
                 window.refresh();
                 window.on_next_frame(move |window, _| {
-                    crate::glide::TRACE_START.set(std::time::Instant::now()).ok();
+                    crate::glide::TRACE_START.set(Instant::now()).ok();
                     wheel_frames(window, wheel, 0, 0);
                 });
             });
@@ -1703,9 +1709,9 @@ impl Shell {
 /// how the first data arrives; then it quits.
 #[cfg(feature = "snapshot")]
 fn launch_frames(window: &mut Window) {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static START: OnceLock<Instant> = OnceLock::new();
     let Ok(dir) = std::env::var("MDB_LAUNCH_FRAMES") else { return };
-    let start = *START.get_or_init(std::time::Instant::now);
+    let start = *START.get_or_init(Instant::now);
     let marks: Vec<u128> = std::env::var("MDB_LAUNCH_MARKS").unwrap_or_default().split(',').filter_map(|x| x.parse().ok()).collect();
     let ms = start.elapsed().as_millis();
     let next = LAUNCH_SAVED.with(|n| n.get());
@@ -1727,9 +1733,9 @@ fn launch_frames(window: &mut Window) {
 
 #[cfg(feature = "snapshot")]
 thread_local! {
-    static LAUNCH_SAVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static CLICKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static DRAG_STEP: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static LAUNCH_SAVED: Cell<usize> = const { Cell::new(0) };
+    static CLICKED: Cell<usize> = const { Cell::new(0) };
+    static DRAG_STEP: Cell<u8> = const { Cell::new(0) };
 }
 
 #[cfg(feature = "snapshot")]

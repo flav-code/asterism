@@ -1,15 +1,18 @@
 //! The Usage tab: what the tokens of every session would cost on the API, per day or hour, the last two hours,
 //! when you work, by model, the top sessions and tools, and records. Read from `UsageView`; nothing is sent anywhere.
 use crate::glide::Glide;
+use crate::seg::Seg;
 use crate::settings::{self, Settings};
 use crate::ui::blue; // over gpui's color of the same name
 use crate::ui::*;
-use asterism_core::graph::UsageView;
-use asterism_core::i18n::{count, decimal, names};
+use asterism_core::graph::{DayRow, UsageView};
+use asterism_core::i18n;
+use asterism_core::usage::Totals;
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use rust_i18n::t;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -59,7 +62,7 @@ impl Metric {
         }
         .into_owned()
     }
-    fn of(self, t: &asterism_core::usage::Totals) -> f64 {
+    fn of(self, t: &Totals) -> f64 {
         match self {
             Metric::Usd => t.usd,
             Metric::Out => t.o as f64,
@@ -81,7 +84,7 @@ pub fn short(x: f64) -> String {
         a if a >= 1e3 => (x / 1e3, "dash.thousands"),
         _ => return format!("{}", x.round()),
     };
-    let n = if v.abs() >= 10.0 { format!("{v:.0}") } else { decimal(v, 1) };
+    let n = if v.abs() >= 10.0 { format!("{v:.0}") } else { i18n::decimal(v, 1) };
     t!(unit, n = n).into_owned()
 }
 
@@ -101,7 +104,7 @@ pub fn usd(x: f64) -> String {
     } else if x >= 10.0 {
         format!("{x:.0}")
     } else {
-        decimal(x, 2)
+        i18n::decimal(x, 2)
     };
     t!("dash.usd", n = n).into_owned()
 }
@@ -254,7 +257,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     };
     let start_key = day_key(start);
     let days: Vec<_> = u.days.iter().filter(|d| d.d >= start_key).collect();
-    let sum = |f: &dyn Fn(&&asterism_core::graph::DayRow) -> f64| days.iter().map(f).sum::<f64>();
+    let sum = |f: &dyn Fn(&&DayRow) -> f64| days.iter().map(f).sum::<f64>();
     let tot_usd = sum(&|d| d.t.usd);
     let (i, o, cr, cw) = (sum(&|d| d.t.i as f64), sum(&|d| d.t.o as f64), sum(&|d| d.t.cr as f64), sum(&|d| d.t.cw as f64));
     let all = i + o + cr + cw;
@@ -280,8 +283,8 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
             index.insert(day_key(d), cols.len());
             cols.push(Col {
                 key: day_key(d),
-                label: d.format(&names(&d, "%-d %b")).to_string(),
-                long: d.format(&names(&d, "%a %-d %b")).to_string(),
+                label: d.format(&i18n::names(&d, "%-d %b")).to_string(),
+                long: d.format(&i18n::names(&d, "%a %-d %b")).to_string(),
                 fams: [0.0; 5],
             });
             d += chrono::Duration::days(1);
@@ -335,7 +338,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     }
 
     let minute = now.timestamp_millis() as u64 / 60_000 * 60_000;
-    let by_minute: HashMap<u64, &asterism_core::usage::Totals> = u.minutes.iter().map(|(m, t)| (*m, t)).collect();
+    let by_minute: HashMap<u64, &Totals> = u.minutes.iter().map(|(m, t)| (*m, t)).collect();
     let live = (0..120)
         .map(|i| {
             let t = minute - (119 - i) * 60_000;
@@ -370,18 +373,21 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     }
     let (all_usd, all_o) = per_day.values().fold((0.0, 0.0), |(usd, output), day| (usd + day.usd, output + day.output));
     let since = ((now.timestamp_millis() as f64 - u.first as f64) / 86_400_000.0).round().max(1.0);
-    let first =
-        Local.timestamp_millis_opt(u.first as i64).single().map(|t| t.format(&names(&t, "%-d %b %Y")).to_string()).unwrap_or_default();
-    let long_day = |k: &str| parse_day(k).map(|d| d.format(&names(&d, "%-d %b")).to_string()).unwrap_or_default();
-    let fact = |label: std::borrow::Cow<str>, value: String, sub: String| Fact { label: label.into_owned(), value, sub };
+    let first = Local
+        .timestamp_millis_opt(u.first as i64)
+        .single()
+        .map(|t| t.format(&i18n::names(&t, "%-d %b %Y")).to_string())
+        .unwrap_or_default();
+    let long_day = |k: &str| parse_day(k).map(|d| d.format(&i18n::names(&d, "%-d %b")).to_string()).unwrap_or_default();
+    let fact = |label: Cow<str>, value: String, sub: String| Fact { label: label.into_owned(), value, sub };
     let facts = [
         fact(
             t!("dash.fact.busiest"),
             best.map_or("—".into(), |(_, day)| usd(day.usd)),
-            best.map_or(String::new(), |(key, day)| format!("{} · {}", long_day(key), count("dash.replies_n", day.replies as u64))),
+            best.map_or(String::new(), |(key, day)| format!("{} · {}", long_day(key), i18n::count("dash.replies_n", day.replies as u64))),
         ),
-        fact(t!("dash.fact.streak"), count("dash.days_n", streak), t!("dash.fact.streak_sub").into_owned()),
-        fact(t!("dash.fact.since"), count("dash.days_n", since as u64), t!("dash.fact.since_sub", date = first).into_owned()),
+        fact(t!("dash.fact.streak"), i18n::count("dash.days_n", streak), t!("dash.fact.streak_sub").into_owned()),
+        fact(t!("dash.fact.since"), i18n::count("dash.days_n", since as u64), t!("dash.fact.since_sub", date = first).into_owned()),
         fact(t!("dash.fact.average"), usd(all_usd / since), t!("dash.fact.average_sub", n = short(all_o / since)).into_owned()),
         fact(
             t!("dash.fact.longest"),
@@ -390,7 +396,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
                 let day = Local
                     .timestamp_millis_opt(b.ts as i64)
                     .single()
-                    .map(|t| t.format(&names(&t, "%-d %b")).to_string())
+                    .map(|t| t.format(&i18n::names(&t, "%-d %b")).to_string())
                     .unwrap_or_default();
                 format!("{} · {day}", pretty_model(&b.model))
             }),
@@ -505,8 +511,8 @@ pub struct DashView {
     mouse: Point<Pixels>,
     pub active: bool,
     anim: Anim,
-    range_seg: crate::seg::Seg,
-    metric_seg: crate::seg::Seg,
+    range_seg: Seg,
+    metric_seg: Seg,
     started: Instant,
     _tick: Task<()>,
 }
@@ -556,8 +562,8 @@ impl DashView {
             mouse: Point::default(),
             active: false,
             anim: Anim::default(),
-            range_seg: crate::seg::Seg::default(),
-            metric_seg: crate::seg::Seg::default(),
+            range_seg: Seg::default(),
+            metric_seg: Seg::default(),
             started: Instant::now(),
             _tick: tick,
         }
@@ -886,7 +892,7 @@ impl Render for DashView {
             ))
             .child(tile(&t!("dash.tile.output"), short(t[2]), t!("dash.tile.output_sub").into_owned()))
             .child(tile(&t!("dash.tile.cache"), pct(t[3]), t!("dash.tile.cache_sub", usd = usd(t[6])).into_owned()))
-            .child(tile(&t!("dash.tile.replies"), short(t[4]), count("dash.sessions_n", d.session_count as u64)))
+            .child(tile(&t!("dash.tile.replies"), short(t[4]), i18n::count("dash.sessions_n", d.session_count as u64)))
             .child(tile(&t!("dash.tile.subagents"), pct(t[5]), t!("dash.tile.subagents_sub").into_owned()));
 
         // The bars chart.
@@ -1286,7 +1292,7 @@ impl Render for DashView {
                         div().text_size(px(12.0)).text_color(muted()).child(format!(
                             "{} · {} · {}",
                             t!("dash.output_n", n = short(o)),
-                            count("dash.replies_n", n as u64),
+                            i18n::count("dash.replies_n", n as u64),
                             usd(v)
                         )),
                     )
@@ -1294,7 +1300,11 @@ impl Render for DashView {
                 Hover::Cell { weekday: wd, hour: hr } => {
                     let HeatCell { replies: n, usd: v } = d.heat[wd][hr];
                     tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", weekday(wd)))).child(
-                        div().text_size(px(12.0)).text_color(muted()).child(format!("{} · {}", count("dash.replies_n", n as u64), usd(v))),
+                        div().text_size(px(12.0)).text_color(muted()).child(format!(
+                            "{} · {}",
+                            i18n::count("dash.replies_n", n as u64),
+                            usd(v)
+                        )),
                     )
                 }
             }
