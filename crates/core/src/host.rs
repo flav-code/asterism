@@ -57,7 +57,16 @@ pub struct HostSampler {
     sys: System,
     /// Swap counters at the previous sample, to turn them into rates (macOS only so far).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    swap: Option<(Instant, u64, u64)>,
+    swap: Option<SwapSample>,
+}
+
+/// The swap counters (pages in and out since boot) at one moment.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct SwapSample {
+    at: Instant,
+    ins: u64,
+    outs: u64,
 }
 
 impl Default for HostSampler {
@@ -117,12 +126,12 @@ impl HostSampler {
             memory.used = v.used;
             memory.compressed = Some(v.compressed);
             let now = Instant::now();
-            if let Some((at, ins, outs)) = self.swap {
+            if let Some(SwapSample { at, ins, outs }) = self.swap {
                 let dt = now.duration_since(at).as_secs_f64().max(1e-3);
                 memory.swap_in = Some(v.swapins.saturating_sub(ins) as f64 * v.page as f64 / dt);
                 memory.swap_out = Some(v.swapouts.saturating_sub(outs) as f64 * v.page as f64 / dt);
             }
-            self.swap = Some((now, v.swapins, v.swapouts));
+            self.swap = Some(SwapSample { at: now, ins: v.swapins, outs: v.swapouts });
             memory.pressure = mac::pressure();
         }
         Host { ncpu, cpu: self.sys.global_cpu_usage() * ncpu as f32, memory }

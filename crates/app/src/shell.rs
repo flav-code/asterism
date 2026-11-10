@@ -1180,7 +1180,7 @@ impl Shell {
         };
         let system = t!("language.system", name = i18n::name(settings::system_language())).into_owned();
         let mut languages = vec![choice("lang-system", system, None)];
-        languages.extend(i18n::LANGUAGES.iter().map(|&(code, name)| choice(code, name.to_string(), Some(code))));
+        languages.extend(i18n::LANGUAGES.iter().map(|l| choice(l.code, l.name.to_string(), Some(l.code))));
         let check = div()
             .id("settings-check")
             .flex_none()

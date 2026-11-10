@@ -6,22 +6,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// Anthropic API prices in $ per million tokens: input, output, cache read. Cache writes cost 1.25× input
-/// (5-minute TTL) or 2× (1-hour TTL). From the published price list of 2026-10-06.
-pub const PRICES: &[(&str, f64, f64, f64)] = &[
-    ("claude-fable-5-1", 10.0, 50.0, 0.25),
-    ("claude-mythos-5-1", 10.0, 50.0, 0.25),
-    ("claude-fable-5", 10.0, 50.0, 1.0),
-    ("claude-opus-5-5", 4.0, 20.0, 0.2),
-    ("claude-opus-5", 5.0, 25.0, 0.5),
-    ("claude-opus-4-8", 5.0, 25.0, 0.5),
-    ("claude-opus-4-7", 5.0, 25.0, 0.5),
-    ("claude-opus-4-6", 5.0, 25.0, 0.5),
-    ("claude-sonnet-5-5", 2.0, 10.0, 0.2),
-    ("claude-sonnet-5", 2.0, 10.0, 0.2),
-    ("claude-sonnet-4-6", 3.0, 15.0, 0.3),
-    ("claude-haiku-5-5", 0.1, 0.5, 0.01),
-    ("claude-haiku-4-5", 1.0, 5.0, 0.1),
+/// A model's Anthropic API price, in $ per million tokens.
+#[derive(Clone, Copy, Debug)]
+pub struct Price {
+    /// The priced model id (see `model_id`).
+    pub model: &'static str,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+}
+
+/// Anthropic API prices. Cache writes cost 1.25× input (5-minute TTL) or 2× (1-hour TTL). From the published price
+/// list of 2026-10-06.
+pub const PRICES: &[Price] = &[
+    Price { model: "claude-fable-5-1", input: 10.0, output: 50.0, cache_read: 0.25 },
+    Price { model: "claude-mythos-5-1", input: 10.0, output: 50.0, cache_read: 0.25 },
+    Price { model: "claude-fable-5", input: 10.0, output: 50.0, cache_read: 1.0 },
+    Price { model: "claude-opus-5-5", input: 4.0, output: 20.0, cache_read: 0.2 },
+    Price { model: "claude-opus-5", input: 5.0, output: 25.0, cache_read: 0.5 },
+    Price { model: "claude-opus-4-8", input: 5.0, output: 25.0, cache_read: 0.5 },
+    Price { model: "claude-opus-4-7", input: 5.0, output: 25.0, cache_read: 0.5 },
+    Price { model: "claude-opus-4-6", input: 5.0, output: 25.0, cache_read: 0.5 },
+    Price { model: "claude-sonnet-5-5", input: 2.0, output: 10.0, cache_read: 0.2 },
+    Price { model: "claude-sonnet-5", input: 2.0, output: 10.0, cache_read: 0.2 },
+    Price { model: "claude-sonnet-4-6", input: 3.0, output: 15.0, cache_read: 0.3 },
+    Price { model: "claude-haiku-5-5", input: 0.1, output: 0.5, cache_read: 0.01 },
+    Price { model: "claude-haiku-4-5", input: 1.0, output: 5.0, cache_read: 0.1 },
 ];
 
 /// "claude-opus-4-8[1m]" or "claude-haiku-4-5-20251001" → the priced id.
@@ -50,7 +60,7 @@ fn n(u: &Value, k: &str) -> f64 {
 /// The API price of one reply's usage, None for a model without a known price.
 pub fn cost(model: &str, u: &Value) -> Option<f64> {
     let id = model_id(model);
-    let &(_, input, output, read) = PRICES.iter().find(|p| p.0 == id)?;
+    let &Price { input, output, cache_read: read, .. } = PRICES.iter().find(|p| p.model == id)?;
     let (i, o, cr, cw) =
         (n(u, "input_tokens"), n(u, "output_tokens"), n(u, "cache_read_input_tokens"), n(u, "cache_creation_input_tokens"));
     let cw1h = u.pointer("/cache_creation/ephemeral_1h_input_tokens").and_then(Value::as_f64).unwrap_or(0.0);
@@ -99,15 +109,33 @@ pub struct Biggest {
     pub model: String,
 }
 
+/// What a day's totals are counted by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DayKey {
+    /// The local day, "YYYY-MM-DD".
+    pub day: String,
+    /// The priced model id.
+    pub model: String,
+    /// Whether a subagent spent it.
+    pub agent: bool,
+}
+
+/// What an hour's totals are counted by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct HourKey {
+    /// The local hour, "YYYY-MM-DDTHH".
+    pub hour: String,
+    /// The model's family.
+    pub fam: &'static str,
+}
+
 /// Everything counted so far, across all transcripts.
 #[derive(Default)]
 pub struct Usage {
     seen: HashSet<String>,
     tool_ids: HashSet<String>,
-    /// (local day, priced model id, from a subagent) → totals.
-    pub day: HashMap<(String, String, bool), Totals>,
-    /// (local "YYYY-MM-DDTHH", family) → totals.
-    pub hour: HashMap<(String, &'static str), Totals>,
+    pub day: HashMap<DayKey, Totals>,
+    pub hour: HashMap<HourKey, Totals>,
     /// Minute (ms since the epoch / 60 000) → totals, the last two hours only.
     pub minute: BTreeMap<u64, Totals>,
     pub tools: HashMap<String, u64>,
@@ -159,8 +187,8 @@ impl Usage {
         let local = Local.timestamp_millis_opt(ts as i64).single();
         let day = local.map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
         let hour = local.map_or_else(String::new, |d| format!("{day}T{:02}", d.hour()));
-        self.day.entry((day.clone(), model_id(model).to_string(), agent)).or_default().add(&r);
-        self.hour.entry((hour, family(model))).or_default().add(&r);
+        self.day.entry(DayKey { day: day.clone(), model: model_id(model).to_string(), agent }).or_default().add(&r);
+        self.hour.entry(HourKey { hour, fam: family(model) }).or_default().add(&r);
         if now_ms.saturating_sub(ts) < 2 * 3_600_000 {
             self.minute.entry(ts / 60_000).or_default().add(&r);
         }

@@ -173,7 +173,15 @@ fn files(home: &Path) -> Vec<(PathBuf, String)> {
 
 #[derive(Default)]
 pub struct DesktopStore {
-    files: HashMap<PathBuf, (Option<SystemTime>, u64, Option<DesktopSession>)>,
+    files: HashMap<PathBuf, Decoded>,
+}
+
+/// A session file as it was last decoded: read again only when its date or size changes.
+struct Decoded {
+    modified: Option<SystemTime>,
+    size: u64,
+    /// None for a file that holds no session.
+    session: Option<DesktopSession>,
 }
 
 impl DesktopStore {
@@ -183,15 +191,15 @@ impl DesktopStore {
         for (f, profile) in files(home) {
             let Ok(md) = fs::metadata(&f) else { continue };
             let modified = md.modified().ok();
-            let unchanged = matches!(self.files.get(&f), Some((m, len, _)) if *m == modified && *len == md.len());
+            let unchanged = self.files.get(&f).is_some_and(|d| d.modified == modified && d.size == md.len());
             if !unchanged {
                 let parsed = fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| parse(&v, &profile));
-                self.files.insert(f.clone(), (modified, md.len(), parsed));
+                self.files.insert(f.clone(), Decoded { modified, size: md.len(), session: parsed });
             }
             seen.insert(f);
         }
         self.files.retain(|f, _| seen.contains(f));
-        self.files.values().filter_map(|(_, _, d)| d.clone()).collect()
+        self.files.values().filter_map(|d| d.session.clone()).collect()
     }
 }
 

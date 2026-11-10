@@ -3,8 +3,15 @@
 //! CLI never does, so it stays in English.
 use rust_i18n::t;
 
-/// The languages there is a file for, each with its name in that language.
-pub const LANGUAGES: [(&str, &str); 2] = [("en", "English"), ("fr", "Français")];
+/// A language there is a file for.
+#[derive(Clone, Copy)]
+pub struct Language {
+    pub code: &'static str,
+    /// Its name in itself.
+    pub name: &'static str,
+}
+
+pub const LANGUAGES: [Language; 2] = [Language { code: "en", name: "English" }, Language { code: "fr", name: "Français" }];
 
 /// The first of these system languages ("fr-CA", "en_US", "fr"…) there is a file for; English if none.
 pub fn pick<'a>(wanted: impl IntoIterator<Item = &'a str>) -> &'static str {
@@ -12,7 +19,7 @@ pub fn pick<'a>(wanted: impl IntoIterator<Item = &'a str>) -> &'static str {
         .into_iter()
         .find_map(|w| {
             let base = w.split(['-', '_', '.']).next().unwrap_or("").to_ascii_lowercase();
-            LANGUAGES.iter().find(|(code, _)| *code == base).map(|(code, _)| *code)
+            LANGUAGES.iter().find(|l| l.code == base).map(|l| l.code)
         })
         .unwrap_or("en")
 }
@@ -27,7 +34,7 @@ pub fn current() -> String {
 
 /// The name of a language in itself ("Français"), or the code when there is no file for it.
 pub fn name(code: &str) -> &str {
-    LANGUAGES.iter().find(|(c, _)| *c == code).map_or(code, |(_, n)| n)
+    LANGUAGES.iter().find(|l| l.code == code).map_or(code, |l| l.name)
 }
 
 /// `key.one` or `key.other` for `n`, with `%{n}` filled in. French says 0 and 1 in the singular, English only 1.
@@ -97,7 +104,8 @@ mod tests {
     #[test]
     fn every_language_has_every_key_with_the_same_placeholders() {
         let en = keys("en");
-        for (lang, _) in LANGUAGES.iter().filter(|(c, _)| *c != "en") {
+        let others = LANGUAGES.iter().map(|l| l.code).filter(|code| *code != "en");
+        for lang in others {
             let other = keys(lang);
             let missing: Vec<_> = en.keys().filter(|k| !other.contains_key(*k)).collect();
             let extra: Vec<_> = other.keys().filter(|k| !en.contains_key(*k)).collect();
@@ -106,7 +114,7 @@ mod tests {
                 assert_eq!(placeholders(text), placeholders(&other[k]), "{lang}.json: {k} has other %{{…}} than en.json");
             }
         }
-        for (lang, _) in LANGUAGES {
+        for Language { code: lang, .. } in LANGUAGES {
             let k = keys(lang);
             assert_eq!(k["date.days_from_sunday"].split(' ').count(), 7, "{lang}.json: 7 days");
             assert_eq!(k["date.months"].split(' ').count(), 12, "{lang}.json: 12 months");

@@ -107,7 +107,11 @@ impl Settings {
             feed_h: v.get("feed_h").and_then(Value::as_f64).map(|h| h as f32).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(d.feed_h),
             usage_range: s("usage_range", &d.usage_range),
             usage_metric: s("usage_metric", &d.usage_metric),
-            language: v.get("language").and_then(Value::as_str).filter(|l| i18n::LANGUAGES.iter().any(|(c, _)| c == l)).map(str::to_string),
+            language: v
+                .get("language")
+                .and_then(Value::as_str)
+                .filter(|l| i18n::LANGUAGES.iter().any(|known| known.code == *l))
+                .map(str::to_string),
             machines: v
                 .get("machines")
                 .and_then(Value::as_array)

@@ -3,7 +3,7 @@
 use crate::desktop::DesktopSession;
 use crate::sessions::project_of;
 use crate::transcripts::{Move, Transcripts};
-use crate::usage::{Biggest, PRICES, Totals, Usage, family, model_id};
+use crate::usage::{Biggest, DayKey, HourKey, PRICES, Totals, Usage, family, model_id};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -357,7 +357,15 @@ pub struct Visualizer {
     builds: u64,
     /// The size of every transcript, measured until all were read once.
     total_bytes: u64,
-    titles: HashMap<String, (String, String, NodeKind)>,
+    titles: HashMap<String, Titled>,
+}
+
+/// What a session of the last map is called, for the usage per session.
+#[derive(Clone)]
+struct Titled {
+    title: String,
+    project: String,
+    kind: NodeKind,
 }
 
 impl Visualizer {
@@ -671,7 +679,8 @@ impl Visualizer {
 
         self.full_scan_step(now_ms, &mut budget);
         self.cli_to_node = cli_to_node;
-        self.titles = nodes.values().map(|n| (n.id.clone(), (n.title.clone(), n.project.clone(), n.kind))).collect();
+        self.titles =
+            nodes.values().map(|n| (n.id.clone(), Titled { title: n.title.clone(), project: n.project.clone(), kind: n.kind })).collect();
         // A subagent runs where its session does.
         let machine_of: HashMap<String, String> =
             nodes.values().filter(|n| !n.machine.is_empty()).map(|n| (n.id.clone(), n.machine.clone())).collect();
@@ -690,12 +699,14 @@ impl Visualizer {
         let days = u
             .day
             .iter()
-            .map(|((d, model, agent), t)| {
-                let saved = PRICES.iter().find(|p| p.0 == model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.1 - p.3) / 1e6);
-                DayRow { d: d.clone(), model: model.clone(), fam: family(model), agent: *agent, t: *t, saved }
+            .map(|(DayKey { day, model, agent }, t)| {
+                // What the cache saved: its reads, at the input price minus the cache read price.
+                let saved =
+                    PRICES.iter().find(|p| p.model == model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.input - p.cache_read) / 1e6);
+                DayRow { d: day.clone(), model: model.clone(), fam: family(model), agent: *agent, t: *t, saved }
             })
             .collect();
-        let hours = u.hour.iter().map(|((h, fam), t)| HourRow { h: h.clone(), fam, t: *t }).collect();
+        let hours = u.hour.iter().map(|(HourKey { hour, fam }, t)| HourRow { h: hour.clone(), fam, t: *t }).collect();
         let minutes = u.minute.iter().map(|(m, t)| (m * 60_000, *t)).collect();
         let mut sessions: HashMap<String, SessionUsage> = HashMap::new();
         for (path, st) in &self.transcripts.files {
@@ -709,14 +720,14 @@ impl Visualizer {
             let id = self.cli_to_node.get(&uuid).cloned().unwrap_or_else(|| format!("cli:{uuid}"));
             let entry = sessions.entry(id.clone()).or_insert_with(|| {
                 let ost = self.transcripts.files.get(&own);
-                let (title, project, kind) = self.titles.get(&id).cloned().unwrap_or_else(|| {
+                let Titled { title, project, kind } = self.titles.get(&id).cloned().unwrap_or_else(|| {
                     let title = ost
                         .and_then(|o| o.title.clone().or_else(|| o.tokens.slug.clone()))
                         .unwrap_or_else(|| uuid.chars().take(8).collect());
                     // The session's own folder, not a subagent's (which may work elsewhere).
                     let cwd = ost.and_then(|o| o.tokens.cwd.as_deref()).or(st.tokens.cwd.as_deref());
                     let project = project_of(cwd.unwrap_or("?"));
-                    (title, project, NodeKind::Cli)
+                    Titled { title, project, kind: NodeKind::Cli }
                 });
                 SessionUsage { id, title, project, kind, days: BTreeMap::new() }
             });

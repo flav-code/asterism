@@ -243,7 +243,7 @@ pub fn group_containers(containers: Vec<Container>) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for c in containers {
-        let label = GROUP_LABELS.iter().find_map(|(l, kind)| c.labels.get(*l).map(|v| (*kind, v.clone())));
+        let label = GROUP_LABELS.iter().find_map(|g| c.labels.get(g.label).map(|v| (g.kind, v.clone())));
         let key = label.as_ref().map_or_else(|| c.id.clone(), |(kind, v)| format!("{kind}:{v}"));
         let i = *index.entry(key).or_insert_with(|| {
             let (kind, name) = label.clone().map_or_else(|| (t!("core.container"), c.name.clone()), |(k, n)| (k.into(), n));
@@ -322,12 +322,33 @@ enum Own {
     Other(String),
 }
 
-/// The app a process belongs to: the first `.app` bundle in its path (macOS), by name and by path.
-fn bundle_of(p: &Proc) -> Option<(String, String)> {
+/// An app bundle (macOS): its name, and the path of its `.app` folder.
+struct Bundle {
+    name: String,
+    path: String,
+}
+
+/// What a process and everything it started use.
+#[derive(Clone, Copy, Default)]
+struct Load {
+    cpu: f32,
+    mem: u64,
+}
+
+/// What the processes of one owner use, and how many they are.
+#[derive(Default)]
+struct OwnerSum {
+    cpu: f32,
+    mem: u64,
+    procs: usize,
+}
+
+/// The app a process belongs to: the first `.app` bundle in its path (macOS).
+fn bundle_of(p: &Proc) -> Option<Bundle> {
     let path = if p.exe.is_empty() { &p.cmd } else { &p.exe };
     let end = path.find(".app/")?;
     let name = path[..end].rsplit(['/', '\\']).next().filter(|n| !n.is_empty())?;
-    Some((name.to_string(), path[..end + 4].to_string()))
+    Some(Bundle { name: name.to_string(), path: path[..end + 4].to_string() })
 }
 
 fn is_system(p: &Proc) -> bool {
@@ -355,17 +376,17 @@ pub fn attribute(inp: Inputs) -> Report {
         list.sort_by_key(|p| p.pid);
     }
     let subtree = |pid: u32| {
-        let (mut cpu, mut mem, mut stack, mut seen) = (0.0, 0, vec![pid], HashSet::new());
+        let (mut load, mut stack, mut seen) = (Load::default(), vec![pid], HashSet::new());
         while let Some(q) = stack.pop() {
             if !seen.insert(q) {
                 continue;
             }
             if let Some(p) = by_pid.get(&q) {
-                (cpu, mem) = (cpu + p.cpu, mem + p.mem);
+                load = Load { cpu: load.cpu + p.cpu, mem: load.mem + p.mem };
             }
             stack.extend(kids.get(&q).into_iter().flatten().map(|k| k.pid));
         }
-        (cpu, mem)
+        load
     };
 
     // Session roots: the outermost `claude` processes (one started by another counts for the outer one).
@@ -485,7 +506,7 @@ pub fn attribute(inp: Inputs) -> Report {
             if x.pid <= 1 {
                 break;
             }
-            if let Some((name, path)) = bundle_of(x) {
+            if let Some(Bundle { name, path }) = bundle_of(x) {
                 bundles.entry(name.clone()).or_insert(path);
                 app = Some(name);
                 break;
@@ -520,7 +541,7 @@ pub fn attribute(inp: Inputs) -> Report {
             std::iter::once((root.pid, false)).chain(detached.get(&li).into_iter().flatten().map(|p| (*p, true))).collect();
         let (mut cpu, mut mem) = (0.0, 0);
         for (start, is_detached) in starts {
-            let (c, m) = subtree(start);
+            let Load { cpu: c, mem: m } = subtree(start);
             (cpu, mem) = (cpu + c, mem + m);
             let mut stack = vec![(start, 0, false)];
             while let Some((pid, depth, in_build)) = stack.pop() {
@@ -530,7 +551,7 @@ pub fn attribute(inp: Inputs) -> Report {
                 }
                 let heavy = depth > 0 && is_shown_build(&p.cmd);
                 if heavy && !in_build {
-                    let (c, m) = subtree(pid);
+                    let Load { cpu: c, mem: m } = subtree(pid);
                     builds.push(Build {
                         pid: Some(pid),
                         container: None,
@@ -545,7 +566,7 @@ pub fn attribute(inp: Inputs) -> Report {
                 }
                 rows.push(row(p, depth, is_detached && depth == 0, heavy));
                 let mut children: Vec<&Proc> = kids.get(&pid).cloned().unwrap_or_default();
-                children.sort_by(|a, b| subtree(a.pid).0.total_cmp(&subtree(b.pid).0));
+                children.sort_by(|a, b| subtree(a.pid).cpu.total_cmp(&subtree(b.pid).cpu));
                 stack.extend(children.into_iter().map(|k| (k.pid, depth + 1, in_build || heavy)));
             }
         }
@@ -568,8 +589,8 @@ pub fn attribute(inp: Inputs) -> Report {
                 detail: redact(&a.detail, inp.home, 200),
                 since: a.since,
                 pid: runner.map(|r| r.pid),
-                cpu: sums.map(|s| s.0),
-                mem: sums.map(|s| s.1),
+                cpu: sums.map(|s| s.cpu),
+                mem: sums.map(|s| s.mem),
             }
         });
         activity_clients.push(clients_now);
@@ -655,18 +676,20 @@ pub fn attribute(inp: Inputs) -> Report {
     unattached.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
 
     // Owners. Sessions count their containers; Docker counts its VM minus what the sessions already count.
-    let mut sums: HashMap<Own, (f32, u64, usize)> = HashMap::new();
+    let mut sums: HashMap<Own, OwnerSum> = HashMap::new();
     for p in inp.procs {
         if let Some(o) = owner.get(&p.pid) {
-            let e = sums.entry(o.clone()).or_default();
-            (e.0, e.1, e.2) = (e.0 + p.cpu, e.1 + p.mem, e.2 + 1);
+            let sum = sums.entry(o.clone()).or_default();
+            sum.cpu += p.cpu;
+            sum.mem += p.mem;
+            sum.procs += 1;
         }
     }
-    let (vm_cpu, vm_mem, _) = sums.remove(&Own::Docker).unwrap_or_default();
+    let OwnerSum { cpu: vm_cpu, mem: vm_mem, .. } = sums.remove(&Own::Docker).unwrap_or_default();
     let containers: Vec<&Container> = groups.iter().flat_map(|g| &g.containers).collect();
     let (attached_cpu, attached_mem) = views.iter().fold((0.0, 0), |a, s| (a.0 + s.docker_cpu, a.1 + s.docker_mem));
     let mut owners: Vec<Owner> = Vec::new();
-    for (o, (cpu, mem, n)) in sums {
+    for (o, OwnerSum { cpu, mem, procs: n }) in sums {
         let (kind, name, session) = match o {
             Own::Session(li) => {
                 let s = &views[li];

@@ -12,9 +12,18 @@ use std::time::{Duration, Instant};
 pub const COMPOSE_PROJECT: &str = "com.docker.compose.project";
 pub const COMPOSE_DIR: &str = "com.docker.compose.project.working_dir";
 pub const COMPOSE_FILES: &str = "com.docker.compose.project.config_files";
-/// Container labels that put containers in one row: local Kubernetes clusters, then Compose projects.
-pub const GROUP_LABELS: &[(&str, &str)] =
-    &[("k3d.cluster", "Kubernetes"), ("io.x-k8s.kind.cluster", "Kubernetes"), (COMPOSE_PROJECT, "Compose")];
+/// A container label that puts containers in one row, and what such a row is.
+pub struct GroupLabel {
+    pub label: &'static str,
+    pub kind: &'static str,
+}
+
+/// The labels that group containers: local Kubernetes clusters, then Compose projects.
+pub const GROUP_LABELS: &[GroupLabel] = &[
+    GroupLabel { label: "k3d.cluster", kind: "Kubernetes" },
+    GroupLabel { label: "io.x-k8s.kind.cluster", kind: "Kubernetes" },
+    GroupLabel { label: COMPOSE_PROJECT, kind: "Compose" },
+];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -62,7 +71,7 @@ pub fn summarize(c: &Value) -> Container {
         config.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()
     };
     let all_labels = config.get("Labels").and_then(Value::as_object);
-    let keep = GROUP_LABELS.iter().map(|(l, _)| *l).chain([COMPOSE_DIR, COMPOSE_FILES]);
+    let keep = GROUP_LABELS.iter().map(|g| g.label).chain([COMPOSE_DIR, COMPOSE_FILES]);
     let labels = keep.filter_map(|k| Some((k.to_string(), all_labels?.get(k)?.as_str()?.to_string()))).collect();
     let binds = c
         .get("Mounts")
