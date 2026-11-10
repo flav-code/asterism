@@ -177,12 +177,71 @@ struct Dash {
     /// Sessions with tokens in the range.
     session_count: usize,
     agent_share: f64,
-    sessions: Vec<(String, String, String, [f64; 4])>,
-    models: Vec<(String, &'static str, f64, f64)>,
-    heat: [[(f64, f64); 24]; 7],
-    /// The last 120 minutes: output tokens, replies, $.
-    live: Vec<(u64, f64, f64, f64)>,
-    facts: [(String, String, String); 6],
+    sessions: Vec<SessionRow>,
+    models: Vec<ModelRow>,
+    /// Per weekday (Monday first), per hour.
+    heat: [[HeatCell; 24]; 7],
+    /// The last 120 minutes.
+    live: Vec<Minute>,
+    facts: [Fact; 6],
+}
+
+/// A session of the "top sessions" list, summed over the range.
+struct SessionRow {
+    id: String,
+    title: String,
+    project: String,
+    /// Output tokens.
+    output: f64,
+    usd: f64,
+    /// All tokens: a session with none is not listed.
+    tokens: f64,
+    /// What its subagents spent, in $.
+    agents_usd: f64,
+}
+
+/// A model of the list, summed over the range.
+struct ModelRow {
+    name: String,
+    /// Its family, for the color.
+    fam: &'static str,
+    usd: f64,
+    /// Output tokens.
+    output: f64,
+}
+
+/// One hour of one weekday.
+#[derive(Clone, Copy, Default)]
+struct HeatCell {
+    replies: f64,
+    usd: f64,
+}
+
+/// One minute of the live chart.
+#[derive(Clone, Copy)]
+struct Minute {
+    /// When it starts, in ms.
+    at: u64,
+    /// Output tokens.
+    output: f64,
+    replies: f64,
+    usd: f64,
+}
+
+/// A record over all time: what it is, its number, a line under it.
+struct Fact {
+    label: String,
+    value: String,
+    sub: String,
+}
+
+/// One day over all time, for the records.
+#[derive(Default)]
+struct DayTotal {
+    usd: f64,
+    replies: f64,
+    /// Output tokens.
+    output: f64,
 }
 
 fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
@@ -236,7 +295,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     };
     let legend = FAMS.iter().copied().filter(|f| days.iter().any(|d| d.fam == *f)).collect();
 
-    let mut sessions: Vec<(String, String, String, [f64; 4])> = u
+    let mut sessions: Vec<SessionRow> = u
         .sessions
         .iter()
         .map(|s| {
@@ -246,28 +305,32 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
                     v[k] += x[k];
                 }
             }
-            (s.id.clone(), s.title.clone(), s.project.clone(), v)
+            // In the order of `SessionUsage::days`.
+            let [output, usd, tokens, agents_usd] = v;
+            SessionRow { id: s.id.clone(), title: s.title.clone(), project: s.project.clone(), output, usd, tokens, agents_usd }
         })
-        .filter(|s| s.3[2] > 0.0)
+        .filter(|s| s.tokens > 0.0)
         .collect();
-    sessions.sort_by(|a, b| b.3[1].total_cmp(&a.3[1]));
+    sessions.sort_by(|a, b| b.usd.total_cmp(&a.usd));
     let session_count = sessions.len();
     sessions.truncate(12);
 
-    let mut by_model: HashMap<&str, (&'static str, f64, f64)> = HashMap::new();
+    let mut by_model: HashMap<&str, ModelRow> = HashMap::new();
     for d in &days {
-        let e = by_model.entry(d.model.as_str()).or_insert((d.fam, 0.0, 0.0));
-        (e.1, e.2) = (e.1 + d.t.usd, e.2 + d.t.o as f64);
+        let model = d.model.as_str();
+        let row = by_model.entry(model).or_insert_with(|| ModelRow { name: pretty_model(model), fam: d.fam, usd: 0.0, output: 0.0 });
+        row.usd += d.t.usd;
+        row.output += d.t.o as f64;
     }
-    let mut models: Vec<(String, &'static str, f64, f64)> =
-        by_model.into_iter().map(|(m, (f, usd, o))| (pretty_model(m), f, usd, o)).collect();
-    models.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let mut models: Vec<ModelRow> = by_model.into_values().collect();
+    models.sort_by(|a, b| b.usd.total_cmp(&a.usd));
 
-    let mut heat = [[(0.0, 0.0); 24]; 7];
+    let mut heat = [[HeatCell::default(); 24]; 7];
     for h in u.hours.iter().filter(|h| h.h.as_str() >= start_key.as_str()) {
         if let (Some(d), Ok(hr)) = (parse_day(&h.h), h.h[11..].parse::<usize>()) {
             let cell = &mut heat[d.weekday().num_days_from_monday() as usize][hr.min(23)];
-            (cell.0, cell.1) = (cell.0 + h.t.n as f64, cell.1 + h.t.usd);
+            cell.replies += h.t.n as f64;
+            cell.usd += h.t.usd;
         }
     }
 
@@ -276,21 +339,28 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     let live = (0..120)
         .map(|i| {
             let t = minute - (119 - i) * 60_000;
-            by_minute.get(&t).map_or((t, 0.0, 0.0, 0.0), |x| (t, x.o as f64, x.n as f64, x.usd))
+            by_minute.get(&t).map_or(Minute { at: t, output: 0.0, replies: 0.0, usd: 0.0 }, |x| Minute {
+                at: t,
+                output: x.o as f64,
+                replies: x.n as f64,
+                usd: x.usd,
+            })
         })
         .collect();
 
     // Records, over all time.
-    let mut per_day: BTreeMap<&str, (f64, f64, f64)> = BTreeMap::new();
+    let mut per_day: BTreeMap<&str, DayTotal> = BTreeMap::new();
     for d in &u.days {
-        let e = per_day.entry(d.d.as_str()).or_default();
-        (e.0, e.1, e.2) = (e.0 + d.t.usd, e.1 + d.t.n as f64, e.2 + d.t.o as f64);
+        let day = per_day.entry(d.d.as_str()).or_default();
+        day.usd += d.t.usd;
+        day.replies += d.t.n as f64;
+        day.output += d.t.o as f64;
     }
-    let best = per_day.iter().max_by(|a, b| a.1.0.total_cmp(&b.1.0));
+    let best = per_day.iter().max_by(|(_, a), (_, b)| a.usd.total_cmp(&b.usd));
     let mut streak = 0;
     let mut d = today;
     loop {
-        let n = per_day.get(day_key(d).as_str()).map_or(0.0, |v| v.1);
+        let n = per_day.get(day_key(d).as_str()).map_or(0.0, |day| day.replies);
         if n > 0.0 {
             streak += 1;
         } else if !(streak == 0 && d == today) {
@@ -298,22 +368,23 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
         }
         d -= chrono::Duration::days(1);
     }
-    let (all_usd, all_o) = per_day.values().fold((0.0, 0.0), |a, v| (a.0 + v.0, a.1 + v.2));
+    let (all_usd, all_o) = per_day.values().fold((0.0, 0.0), |(usd, output), day| (usd + day.usd, output + day.output));
     let since = ((now.timestamp_millis() as f64 - u.first as f64) / 86_400_000.0).round().max(1.0);
     let first =
         Local.timestamp_millis_opt(u.first as i64).single().map(|t| t.format(&names(&t, "%-d %b %Y")).to_string()).unwrap_or_default();
     let long_day = |k: &str| parse_day(k).map(|d| d.format(&names(&d, "%-d %b")).to_string()).unwrap_or_default();
+    let fact = |label: std::borrow::Cow<str>, value: String, sub: String| Fact { label: label.into_owned(), value, sub };
     let facts = [
-        (
-            t!("dash.fact.busiest").into_owned(),
-            best.map_or("—".into(), |b| usd(b.1.0)),
-            best.map_or(String::new(), |b| format!("{} · {}", long_day(b.0), count("dash.replies_n", b.1.1 as u64))),
+        fact(
+            t!("dash.fact.busiest"),
+            best.map_or("—".into(), |(_, day)| usd(day.usd)),
+            best.map_or(String::new(), |(key, day)| format!("{} · {}", long_day(key), count("dash.replies_n", day.replies as u64))),
         ),
-        (t!("dash.fact.streak").into_owned(), count("dash.days_n", streak), t!("dash.fact.streak_sub").into_owned()),
-        (t!("dash.fact.since").into_owned(), count("dash.days_n", since as u64), t!("dash.fact.since_sub", date = first).into_owned()),
-        (t!("dash.fact.average").into_owned(), usd(all_usd / since), t!("dash.fact.average_sub", n = short(all_o / since)).into_owned()),
-        (
-            t!("dash.fact.longest").into_owned(),
+        fact(t!("dash.fact.streak"), count("dash.days_n", streak), t!("dash.fact.streak_sub").into_owned()),
+        fact(t!("dash.fact.since"), count("dash.days_n", since as u64), t!("dash.fact.since_sub", date = first).into_owned()),
+        fact(t!("dash.fact.average"), usd(all_usd / since), t!("dash.fact.average_sub", n = short(all_o / since)).into_owned()),
+        fact(
+            t!("dash.fact.longest"),
             u.biggest.as_ref().map_or("—".into(), |b| t!("dash.fact.tokens", n = short(b.o as f64)).into_owned()),
             u.biggest.as_ref().map_or(String::new(), |b| {
                 let day = Local
@@ -324,7 +395,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
                 format!("{} · {day}", pretty_model(&b.model))
             }),
         ),
-        (t!("dash.fact.all_time").into_owned(), usd(all_usd), t!("dash.fact.all_time_sub", n = short(all_o)).into_owned()),
+        fact(t!("dash.fact.all_time"), usd(all_usd), t!("dash.fact.all_time_sub", n = short(all_o)).into_owned()),
     ];
 
     Dash {
@@ -354,11 +425,17 @@ const DATA_TAU: f32 = 0.12;
 /// jumping. Each frame asks for every value by key; values nobody asked for are dropped.
 #[derive(Default)]
 struct Anim {
-    shown: HashMap<String, (f64, u64)>,
+    shown: HashMap<String, Shown>,
     frame: u64,
     dt: f32,
     last: Option<Instant>,
     moving: bool,
+}
+
+/// A value on screen, and the last frame that asked for it.
+struct Shown {
+    value: f64,
+    frame: u64,
 }
 
 impl Anim {
@@ -372,20 +449,20 @@ impl Anim {
     /// The value of `key` this frame, on its way to `to`; a new key starts from `from`.
     fn val(&mut self, key: String, to: f64, from: f64) -> f64 {
         let (frame, k) = (self.frame, (-self.dt / DATA_TAU).exp() as f64);
-        let e = self.shown.entry(key).or_insert((from, frame));
-        let mut v = to + (e.0 - to) * k;
-        if crate::glide::off() || (v - to).abs() <= 1e-3 * to.abs().max(e.0.abs()) + 1e-9 {
+        let e = self.shown.entry(key).or_insert(Shown { value: from, frame });
+        let mut v = to + (e.value - to) * k;
+        if crate::glide::off() || (v - to).abs() <= 1e-3 * to.abs().max(e.value.abs()) + 1e-9 {
             v = to;
         } else {
             self.moving = true;
         }
-        *e = (v, frame);
+        *e = Shown { value: v, frame };
         v
     }
 
     fn end(&mut self) {
         let frame = self.frame;
-        self.shown.retain(|_, v| v.1 == frame);
+        self.shown.retain(|_, shown| shown.frame == frame);
     }
 }
 
@@ -398,11 +475,21 @@ pub enum DashEvent {
 enum Hover {
     Col(usize),
     Minute(usize),
-    Cell(usize, usize),
+    Cell { weekday: usize, hour: usize },
 }
 
 /// The data, range, metric, minute and language a `Dash` was worked out for.
-type DashKey = (usize, Range, Metric, u64, String);
+/// What a computed `Dash` was made from: computed again only when one of these changes.
+#[derive(PartialEq)]
+struct DashKey {
+    /// The usage's address: a new one is new data.
+    usage: usize,
+    range: Range,
+    metric: Metric,
+    /// The live chart moves each minute.
+    minute: u64,
+    language: String,
+}
 
 pub struct DashView {
     usage: Option<Arc<UsageView>>,
@@ -483,7 +570,13 @@ impl DashView {
 
     fn dash(&mut self) -> Option<Rc<Dash>> {
         let u = self.usage.clone()?;
-        let key = (Arc::as_ptr(&u) as usize, self.range, self.metric, now_ms() / 60_000, asterism_core::i18n::current());
+        let key = DashKey {
+            usage: Arc::as_ptr(&u) as usize,
+            range: self.range,
+            metric: self.metric,
+            minute: now_ms() / 60_000,
+            language: asterism_core::i18n::current(),
+        };
         if let Some((k, d)) = &self.cache
             && *k == key
         {
@@ -497,7 +590,7 @@ impl DashView {
     fn hit(&self, p: Point<Pixels>, d: &Dash) -> Option<Hover> {
         let (b, l, h) = (self.bars.get(), self.live.get(), self.heat.get());
         if b.contains(&p) && !d.cols.is_empty() {
-            let (x0, step, _) = band(f32::from(b.size.width), d.cols.len());
+            let Band { left: x0, step } = band(f32::from(b.size.width), d.cols.len());
             let i = ((f32::from(p.x - b.origin.x) - x0) / step).floor();
             return (i >= 0.0 && (i as usize) < d.cols.len()).then_some(Hover::Col(i as usize));
         }
@@ -511,19 +604,26 @@ impl DashView {
             let (x, y) = (f32::from(p.x - h.origin.x) - 34.0, f32::from(p.y - h.origin.y) - 16.0);
             let (hr, wd) = ((x / cw).floor(), (y / CELL_H).floor());
             if (0.0..24.0).contains(&hr) && (0.0..7.0).contains(&wd) {
-                return Some(Hover::Cell(wd as usize, hr as usize));
+                return Some(Hover::Cell { weekday: wd as usize, hour: hr as usize });
             }
         }
         None
     }
 }
 
-/// The bars chart's band scale over `n` columns: first x, step, bar width (d3 `scaleBand`, no outer padding).
-fn band(w: f32, n: usize) -> (f32, f32, f32) {
+/// The bars chart's band scale (d3 `scaleBand`, no outer padding).
+struct Band {
+    /// The first column's left edge.
+    left: f32,
+    /// From one column's left edge to the next's.
+    step: f32,
+}
+
+/// The band scale of `n` columns over a chart `w` wide.
+fn band(w: f32, n: usize) -> Band {
     let (l, r) = (48.0, 6.0);
     let inner = if n > 60 { 0.12 } else { 0.22 };
-    let step = (w - l - r) / (n as f32 - inner).max(1.0);
-    (l, step, step * (1.0 - inner))
+    Band { left: l, step: (w - l - r) / (n as f32 - inner).max(1.0) }
 }
 
 /// A monotone curve through `pts` (d3 `curveMonotoneX`), added to `path` after its first point.
@@ -665,22 +765,22 @@ impl Render for DashView {
             .collect();
         let bars_now: Vec<[f64; 5]> =
             d.cols.iter().map(|c| std::array::from_fn(|f| a.val(format!("b{}{f}", c.key), c.fams[f], 0.0))).collect();
-        let live_max_target = d.live.iter().map(|p| p.1).fold(0.0, f64::max).max(1.0);
+        let live_max_target = d.live.iter().map(|m| m.output).fold(0.0, f64::max).max(1.0);
         let live_max = a.val("lmax".into(), live_max_target, live_max_target);
-        let live_now: Vec<f64> = d.live.iter().map(|p| a.val(format!("m{}", p.0), p.1, 0.0)).collect();
-        let heat_max = d.heat.iter().flatten().map(|c| c.0).fold(0.0, f64::max).max(1.0);
+        let live_now: Vec<f64> = d.live.iter().map(|m| a.val(format!("m{}", m.at), m.output, 0.0)).collect();
+        let heat_max = d.heat.iter().flatten().map(|c| c.replies).fold(0.0, f64::max).max(1.0);
         let heat_now: Vec<f64> = (0..7 * 24)
             .map(|i| {
-                let n = d.heat[i / 24][i % 24].0;
+                let n = d.heat[i / 24][i % 24].replies;
                 let level = if n > 0.0 { 1.0 + ((n / heat_max).sqrt() * 5.0).floor().min(4.0) } else { 0.0 };
                 a.val(format!("h{i}"), level, 0.0)
             })
             .collect();
-        let model_share: Vec<f64> = d.models.iter().map(|m| a.val(format!("lm{}", m.0), m.2 / d.tot_usd.max(1e-9), 0.0)).collect();
-        let top_session = d.sessions.first().map_or(1.0, |s| s.3[1].max(1e-9));
-        let session_share: Vec<f64> = d.sessions.iter().map(|s| a.val(format!("ls{}", s.0), s.3[1] / top_session, 0.0)).collect();
-        let first_tool = u.tools.first().map_or(1.0, |t| t.1.max(1) as f64);
-        let tool_share: Vec<f64> = u.tools.iter().map(|t| a.val(format!("lt{}", t.0), t.1 as f64 / first_tool, 0.0)).collect();
+        let model_share: Vec<f64> = d.models.iter().map(|m| a.val(format!("lm{}", m.name), m.usd / d.tot_usd.max(1e-9), 0.0)).collect();
+        let top_session = d.sessions.first().map_or(1.0, |s| s.usd.max(1e-9));
+        let session_share: Vec<f64> = d.sessions.iter().map(|s| a.val(format!("ls{}", s.id), s.usd / top_session, 0.0)).collect();
+        let first_tool = u.tools.first().map_or(1.0, |(_, n)| (*n).max(1) as f64);
+        let tool_share: Vec<f64> = u.tools.iter().map(|(name, n)| a.val(format!("lt{name}"), *n as f64 / first_tool, 0.0)).collect();
         a.end();
         crate::glide::trace("bars", bars_now.iter().flatten().sum::<f64>() as f32);
         crate::glide::trace("heat", heat_now.iter().sum::<f64>() as f32);
@@ -824,7 +924,7 @@ impl Render for DashView {
                         true,
                     );
                 }
-                let (x0, step, _) = band(w, d.cols.len());
+                let Band { left: x0, step } = band(w, d.cols.len());
                 let plot = w - 48.0 - 6.0;
                 let every = d.cols.len().div_ceil(10).max((label_gap / step).ceil() as usize).max(1);
                 for (i, c) in d.cols.iter().enumerate() {
@@ -895,8 +995,8 @@ impl Render for DashView {
                 let o = b.origin;
                 let (w, h) = (f32::from(b.size.width), CHART_H);
                 let (l, r, t, bm) = (4.0, 10.0, 50.0, 18.0);
-                let last10 = d.live[110..].iter().map(|p| p.1).sum::<f64>() / 10.0;
-                let last_hour = d.live[60..].iter().map(|p| p.3).sum::<f64>();
+                let last10 = d.live[110..].iter().map(|m| m.output).sum::<f64>() / 10.0;
+                let last_hour = d.live[60..].iter().map(|m| m.usd).sum::<f64>();
                 paint_text(
                     window,
                     cx,
@@ -1001,7 +1101,7 @@ impl Render for DashView {
                             o + point(px(l + hr as f32 * cw + 1.0), px(t + wd as f32 * CELL_H + 1.0)),
                             size(px(cw - 2.0), px(CELL_H - 2.0)),
                         );
-                        let ring = if hover == Some(Hover::Cell(wd, hr)) { rgba(0xffffffb0) } else { rgba(0) };
+                        let ring = if hover == Some(Hover::Cell { weekday: wd, hour: hr }) { rgba(0xffffffb0) } else { rgba(0) };
                         window.paint_quad(quad(cell, px(2.0), color, px(1.0), ring, BorderStyle::Solid));
                     }
                 }
@@ -1058,30 +1158,30 @@ impl Render for DashView {
         } else {
             t!("dash.per_day", metric = self.metric.name())
         };
-        let models = d.models.iter().enumerate().map(|(i, (m, f, v, o))| {
+        let models = d.models.iter().enumerate().map(|(i, m)| {
             list_row(
-                div().child(m.clone()).into_any_element(),
-                value(usd(*v), t!("dash.out", n = short(*o)).into_owned()),
+                div().child(m.name.clone()).into_any_element(),
+                value(usd(m.usd), t!("dash.out", n = short(m.output)).into_owned()),
                 model_share[i],
-                fam_color(f),
+                fam_color(m.fam),
                 i == 0,
             )
         });
-        let sessions = d.sessions.iter().enumerate().map(|(i, (id, title, project, v))| {
-            let id = id.clone();
+        let sessions = d.sessions.iter().enumerate().map(|(i, s)| {
+            let id = s.id.clone();
             let label = div()
                 .id(SharedString::from(format!("u-s-{i}")))
                 .flex()
                 .items_center()
                 .gap(px(6.0))
                 .min_w_0()
-                .child(div().text_color(blue()).cursor_pointer().overflow_hidden().child(clip(title, 60)))
-                .child(chip(project.clone(), muted()).bg(panel()).border_1().border_color(line()).font_family(MONO).text_size(px(10.0)))
+                .child(div().text_color(blue()).cursor_pointer().overflow_hidden().child(clip(&s.title, 60)))
+                .child(chip(s.project.clone(), muted()).bg(panel()).border_1().border_color(line()).font_family(MONO).text_size(px(10.0)))
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(DashEvent::Open(id.clone()))))
                 .into_any_element();
-            let out = t!("dash.out", n = short(v[0])).into_owned();
-            let sub = if v[3] > 0.0 { format!("{out} · {}", t!("dash.subagents_usd", usd = usd(v[3]))) } else { out };
-            list_row(label, value(usd(v[1]), sub), session_share[i], rgb(0x3987e5), i == 0)
+            let out = t!("dash.out", n = short(s.output)).into_owned();
+            let sub = if s.agents_usd > 0.0 { format!("{out} · {}", t!("dash.subagents_usd", usd = usd(s.agents_usd))) } else { out };
+            list_row(label, value(usd(s.usd), sub), session_share[i], rgb(0x3987e5), i == 0)
         });
         let tools = u.tools.iter().enumerate().map(|(i, (t, n))| {
             list_row(
@@ -1093,7 +1193,7 @@ impl Render for DashView {
             )
         });
         let empty = || div().text_size(px(12.0)).text_color(faint()).child(t!("dash.empty").into_owned());
-        let facts = div().flex().gap(px(14.0)).children(d.facts.iter().map(|(k, v, s)| {
+        let facts = div().flex().gap(px(14.0)).children(d.facts.iter().map(|Fact { label: k, value: v, sub: s }| {
             span(
                 div()
                     .flex()
@@ -1181,7 +1281,7 @@ impl Render for DashView {
                         }))
                 }
                 Hover::Minute(i) => {
-                    let (t, o, n, v) = d.live[i];
+                    let Minute { at: t, output: o, replies: n, usd: v } = d.live[i];
                     tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(when(t))).child(
                         div().text_size(px(12.0)).text_color(muted()).child(format!(
                             "{} · {} · {}",
@@ -1191,8 +1291,8 @@ impl Render for DashView {
                         )),
                     )
                 }
-                Hover::Cell(wd, hr) => {
-                    let (n, v) = d.heat[wd][hr];
+                Hover::Cell { weekday: wd, hour: hr } => {
+                    let HeatCell { replies: n, usd: v } = d.heat[wd][hr];
                     tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", weekday(wd)))).child(
                         div().text_size(px(12.0)).text_color(muted()).child(format!("{} · {}", count("dash.replies_n", n as u64), usd(v))),
                     )

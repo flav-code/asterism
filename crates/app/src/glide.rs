@@ -14,12 +14,18 @@ pub fn ease(now: f32, to: f32, dt: f32) -> f32 {
     to + (now - to) * (-dt.min(0.1) / TAU).exp()
 }
 
+/// A wheel glide on its way: the offset it goes to, and when the last frame moved it.
+#[derive(Clone, Copy)]
+struct Gliding {
+    to: f32,
+    last: Instant,
+}
+
 /// The scroll of one container: give it `.track_scroll(&glide.handle)` and `glide.driver()` as a child.
 #[derive(Clone, Default)]
 pub struct Glide {
     pub handle: ScrollHandle,
-    /// Where the scroll is going, and when the last frame moved it.
-    to: Rc<Cell<Option<(f32, Instant)>>>,
+    to: Rc<Cell<Option<Gliding>>>,
     bar: Rc<RefCell<Bar>>,
     /// The list's area as the pointer sees it: not hovered when a menu or a card covers it.
     hitbox: Rc<RefCell<Option<Hitbox>>>,
@@ -199,15 +205,15 @@ impl Glide {
             if max <= 0.0 {
                 return; // nothing to scroll here: an outer scroll may want it
             }
-            let from = glide.to.get().map_or(f32::from(glide.handle.offset().y), |t| t.0);
+            let from = glide.to.get().map_or(f32::from(glide.handle.offset().y), |g| g.to);
             let to = (from + f32::from(e.delta.pixel_delta(line).y)).clamp(-max, 0.0);
-            glide.to.set(Some((to, Instant::now())));
+            glide.to.set(Some(Gliding { to, last: Instant::now() }));
             cx.stop_propagation();
             window.refresh();
         });
         let y = f32::from(self.handle.offset().y);
         trace("scroll", y);
-        let Some((to, last)) = self.to.get() else { return };
+        let Some(Gliding { to, last }) = self.to.get() else { return };
         let now = Instant::now();
         let next = ease(y, to, (now - last).as_secs_f32());
         if (next - to).abs() < 0.5 {
@@ -215,7 +221,7 @@ impl Glide {
             self.to.set(None);
         } else {
             self.handle.set_offset(point(self.handle.offset().x, px(next)));
-            self.to.set(Some((to, now)));
+            self.to.set(Some(Gliding { to, last: now }));
         }
         window.request_animation_frame();
     }

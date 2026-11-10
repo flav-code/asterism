@@ -60,7 +60,7 @@ pub struct MapView {
     node_of: Vec<usize>,
     body_of: HashMap<String, usize>,
     radius: Vec<f32>,
-    links: Vec<(usize, usize, EdgeKind)>,
+    links: Vec<BodyLink>,
     pairs: Vec<Pair>,
     subagents: Vec<u32>,
     quiet: Vec<bool>,
@@ -74,12 +74,11 @@ pub struct MapView {
     tx: f32,
     ty: f32,
     fit_pending: bool,
-    /// A wheel zoom on its way: the zoom it goes to, the point that stays put, the last frame.
-    zoom: Option<(f32, (f32, f32), Instant)>,
+    zoom: Option<Zooming>,
     canvas: Rc<Cell<Bounds<Pixels>>>,
     hover: Option<usize>,
     mouse: Point<Pixels>,
-    drag: Option<(Point<Pixels>, f32, f32, bool)>,
+    drag: Option<Drag>,
     pub selected: Option<String>,
     pub titles: Titles,
     pub active: bool,
@@ -100,6 +99,34 @@ pub struct MapView {
 }
 
 impl EventEmitter<MapEvent> for MapView {}
+
+/// A link drawn between two bubbles, by their body indexes.
+#[derive(Clone, Copy)]
+struct BodyLink {
+    from: usize,
+    to: usize,
+    kind: EdgeKind,
+}
+
+/// A wheel zoom on its way.
+#[derive(Clone, Copy)]
+struct Zooming {
+    /// The zoom it goes to.
+    to: f32,
+    /// The point of the canvas that stays put.
+    at: (f32, f32),
+    /// When the last frame moved it.
+    last: Instant,
+}
+
+/// The map held by the mouse: where it was pressed, the map's offset then, and whether the pointer moved since (a
+/// press that did not is a click).
+struct Drag {
+    start: Point<Pixels>,
+    tx: f32,
+    ty: f32,
+    moved: bool,
+}
 
 fn radius_of(n: &Node, deg: u32) -> f32 {
     match n.kind {
@@ -262,11 +289,14 @@ impl MapView {
             p.reports += u32::from(m.kind == MsgKind::Report);
             p.last = p.last.max(m.ts);
         }
-        let links: Vec<(usize, usize, EdgeKind)> =
-            v.edges.iter().filter_map(|&e| Some((body(&g.edges[e].from)?, body(&g.edges[e].to)?, g.edges[e].kind))).collect();
+        let links: Vec<BodyLink> = v
+            .edges
+            .iter()
+            .filter_map(|&e| Some(BodyLink { from: body(&g.edges[e].from)?, to: body(&g.edges[e].to)?, kind: g.edges[e].kind }))
+            .collect();
         let mut linked = vec![false; v.nodes.len()];
         let mut subagents = vec![0u32; v.nodes.len()];
-        for &(a, b, kind) in &links {
+        for &BodyLink { from: a, to: b, kind } in &links {
             linked[a] = true;
             linked[b] = true;
             if kind == EdgeKind::Agent {
@@ -305,7 +335,7 @@ impl MapView {
             n.id.hash(&mut h);
         }
         for l in &links {
-            (l.0, l.1).hash(&mut h);
+            (l.from, l.to).hash(&mut h);
         }
         for k in pairs.keys() {
             k.hash(&mut h);
@@ -353,7 +383,7 @@ impl MapView {
         }
         self.sim.links = links
             .iter()
-            .map(|&(s, t, kind)| match kind {
+            .map(|&BodyLink { from: s, to: t, kind }| match kind {
                 EdgeKind::Agent => Link { s, t, distance: 22.0 + radius[s], strength: 1.0 },
                 _ => Link { s, t, distance: 85.0, strength: 0.45 },
             })
@@ -464,7 +494,7 @@ impl MapView {
 
     fn neighbours(&self, b: usize) -> HashSet<usize> {
         let mut set = HashSet::from([b]);
-        for &(s, t, _) in &self.links {
+        for &BodyLink { from: s, to: t, .. } in &self.links {
             if s == b {
                 set.insert(t);
             }
@@ -492,18 +522,73 @@ impl MapView {
 }
 
 /// What one frame draws, in canvas coordinates.
-/// Points, the arrow tip, width, color, dashed.
-type Line = (Vec<Point<Pixels>>, Option<Point<Pixels>>, f32, Rgba, bool);
-
+#[derive(Default)]
 struct Scene {
     lines: Vec<Line>,
-    arrows: Vec<(Point<Pixels>, Point<Pixels>, Rgba)>,
-    circles: Vec<(Point<Pixels>, f32, Rgba, Rgba, f32, bool)>,
-    labels: Vec<(Point<Pixels>, SharedString, f32, Rgba, bool, FontWeight)>,
-    comets: Vec<(Point<Pixels>, Rgba)>,
-    ripples: Vec<(Point<Pixels>, f32, Rgba)>,
-    /// Sessions not on this computer: a small disc with where they run (center, radius, icon, opacity).
-    badges: Vec<(Point<Pixels>, f32, IconName, f32)>,
+    arrows: Vec<Arrow>,
+    circles: Vec<Circle>,
+    labels: Vec<Label>,
+    comets: Vec<CometHead>,
+    ripples: Vec<Ripple>,
+    /// Sessions not on this computer: a small disc with where they run.
+    badges: Vec<Badge>,
+}
+
+/// A link: straight, or bent toward `ctrl`.
+struct Line {
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    ctrl: Option<Point<Pixels>>,
+    width: f32,
+    color: Rgba,
+    dashed: bool,
+}
+
+/// An arrowhead at `tip`, pointing away from `from`.
+struct Arrow {
+    tip: Point<Pixels>,
+    from: Point<Pixels>,
+    color: Rgba,
+}
+
+struct Circle {
+    center: Point<Pixels>,
+    radius: f32,
+    fill: Rgba,
+    stroke: Rgba,
+    /// The stroke's width.
+    width: f32,
+    dashed: bool,
+}
+
+struct Label {
+    /// Its top, and its left end or its middle when `centered`.
+    at: Point<Pixels>,
+    text: SharedString,
+    size: f32,
+    color: Rgba,
+    centered: bool,
+    weight: FontWeight,
+}
+
+/// The dot of a message on its way.
+struct CometHead {
+    center: Point<Pixels>,
+    color: Rgba,
+}
+
+/// The ring a message leaves where it lands.
+struct Ripple {
+    center: Point<Pixels>,
+    radius: f32,
+    color: Rgba,
+}
+
+struct Badge {
+    center: Point<Pixels>,
+    radius: f32,
+    icon: IconName,
+    opacity: f32,
 }
 
 fn quad_point(a: Point<Pixels>, c: Point<Pixels>, b: Point<Pixels>, t: f32) -> Point<Pixels> {
@@ -513,8 +598,8 @@ fn quad_point(a: Point<Pixels>, c: Point<Pixels>, b: Point<Pixels>, t: f32) -> P
 
 fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
     let o = bounds.origin;
-    for (pts, ctrl, width, color, dashed) in &scene.lines {
-        let (a, b) = (o + pts[0], o + pts[1]);
+    for Line { from, to, ctrl, width, color, dashed } in &scene.lines {
+        let (a, b) = (o + *from, o + *to);
         let mut path = PathBuilder::stroke(px(*width));
         match ctrl {
             Some(c) if !*dashed => {
@@ -541,7 +626,7 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
             window.paint_path(p, *color);
         }
     }
-    for (tip, from, color) in &scene.arrows {
+    for Arrow { tip, from, color } in &scene.arrows {
         let (tip, from) = (o + *tip, o + *from);
         let d = tip - from;
         let len = (d.magnitude() as f32).max(1e-3);
@@ -556,13 +641,13 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
             window.paint_path(p, *color);
         }
     }
-    for (c, r, fill, stroke, width, dashed) in &scene.circles {
+    for Circle { center: c, radius: r, fill, stroke, width, dashed } in &scene.circles {
         let c = o + *c;
         let b = Bounds::new(point(c.x - px(*r), c.y - px(*r)), size(px(r * 2.0), px(r * 2.0)));
         let style = if *dashed { BorderStyle::Dashed } else { BorderStyle::Solid };
         window.paint_quad(quad(b, px(*r), *fill, px(*width), *stroke, style));
     }
-    for (c, r, icon, op) in &scene.badges {
+    for Badge { center: c, radius: r, icon, opacity: op } in &scene.badges {
         let c = o + *c;
         let b = Bounds::new(point(c.x - px(*r), c.y - px(*r)), size(px(r * 2.0), px(r * 2.0)));
         window.paint_quad(quad(b, px(*r), alpha(rgb(0x1b1d2a), *op), px(1.0), alpha(rgb(0xb8b9c6), *op), BorderStyle::Solid));
@@ -570,17 +655,17 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
         let ib = Bounds::new(point(c.x - px(s / 2.0), c.y - px(s / 2.0)), size(px(s), px(s)));
         window.paint_svg(ib, icon.path(), None, TransformationMatrix::unit(), alpha(rgb(0xe4e5ee), *op).into(), cx).ok();
     }
-    for (c, r, color) in &scene.ripples {
+    for Ripple { center: c, radius: r, color } in &scene.ripples {
         let c = o + *c;
         let b = Bounds::new(point(c.x - px(*r), c.y - px(*r)), size(px(r * 2.0), px(r * 2.0)));
         window.paint_quad(quad(b, px(*r), transparent_black(), px(2.5), *color, BorderStyle::Solid));
     }
-    for (c, color) in &scene.comets {
+    for CometHead { center: c, color } in &scene.comets {
         let c = o + *c;
         let b = Bounds::new(point(c.x - px(4.5), c.y - px(4.5)), size(px(9.0), px(9.0)));
         window.paint_quad(quad(b, px(4.5), rgb(0xffffff), px(2.0), *color, BorderStyle::Solid));
     }
-    for (p, text, font_size, color, center, weight) in scene.labels {
+    for Label { at: p, text, size: font_size, color, centered: center, weight } in scene.labels {
         let font = Font { weight, ..window.text_style().font() };
         let run = |c: Rgba| TextRun {
             len: text.len(),
@@ -605,7 +690,7 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
 
 impl Render for MapView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some((to, at, last)) = self.zoom {
+        if let Some(Zooming { to, at, last }) = self.zoom {
             let now = Instant::now();
             // In log space, so zooming in and out feel the same.
             let k = glide::ease(self.k.ln(), to.ln(), (now - last).as_secs_f32()).exp();
@@ -614,7 +699,7 @@ impl Render for MapView {
                 self.zoom = None;
             } else {
                 self.zoom_at(k, at);
-                self.zoom = Some((to, at, now));
+                self.zoom = Some(Zooming { to, at, last: now });
                 crate::glide::again(window, cx);
             }
         }
@@ -652,15 +737,14 @@ impl Render for MapView {
         let far = k < 0.55 && self.node_of.len() > 150;
         let now = now_ms();
         let t = Instant::now();
-        let mut scene =
-            Scene { lines: vec![], arrows: vec![], circles: vec![], labels: vec![], comets: vec![], ripples: vec![], badges: vec![] };
+        let mut scene = Scene::default();
 
         let focus_link = |a: usize, b: usize| focus.is_some_and(|f| f == a || f == b);
         // Hovering dims the rest of the map and shows titles: both fade instead of switching.
         let mut fades = std::mem::take(&mut self.fades);
         fades.begin();
         let hk = &self.hashes;
-        for &(s, tgt, kind) in &self.links {
+        for &BodyLink { from: s, to: tgt, kind } in &self.links {
             let (a, b) = (at(s), at(tgt));
             let n = &g.nodes[self.node_of[s]];
             let lit = fades.get(hk[s].wrapping_mul(31) ^ hk[tgt] ^ 0xa, if near.is_some() && !focus_link(s, tgt) { 0.0 } else { 1.0 }, 1.0);
@@ -670,7 +754,7 @@ impl Render for MapView {
                     if far && !focus_link(s, tgt) {
                         continue;
                     }
-                    scene.lines.push((vec![a, b], None, 0.7, faded(self.color(n), 0.35), false));
+                    scene.lines.push(Line { from: a, to: b, ctrl: None, width: 0.7, color: faded(self.color(n), 0.35), dashed: false });
                 }
                 EdgeKind::Spawn | EdgeKind::Fork => {
                     let d = b - a;
@@ -678,8 +762,9 @@ impl Render for MapView {
                     let back = (self.radius[tgt] + 5.0) * k / len;
                     let end = b - d * back;
                     let color = if kind == EdgeKind::Spawn { rgb(0xa78bfa) } else { rgb(0xf472b6) };
-                    scene.lines.push((vec![a, end], None, 1.5, faded(color, 0.75), kind == EdgeKind::Fork));
-                    scene.arrows.push((end, a, faded(color, 0.9)));
+                    let dashed = kind == EdgeKind::Fork;
+                    scene.lines.push(Line { from: a, to: end, ctrl: None, width: 1.5, color: faded(color, 0.75), dashed });
+                    scene.arrows.push(Arrow { tip: end, from: a, color: faded(color, 0.9) });
                 }
             }
         }
@@ -692,7 +777,8 @@ impl Render for MapView {
             let lit =
                 fades.get(hk[p.a].wrapping_mul(37) ^ hk[p.b] ^ 0xb, if near.is_some() && !focus_link(p.a, p.b) { 0.0 } else { 1.0 }, 1.0);
             let op = 0.12 + (if fresh { 0.9 } else { 0.6 } - 0.12) * lit;
-            scene.lines.push((vec![a, b], Some(ctrl), 1.3 + (p.n as f32).log2() * 1.1, alpha(color, op), false));
+            let width = 1.3 + (p.n as f32).log2() * 1.1;
+            scene.lines.push(Line { from: a, to: b, ctrl: Some(ctrl), width, color: alpha(color, op), dashed: false });
         }
 
         // Bubbles, then their titles: a title never covers another, the most important stays.
@@ -726,22 +812,43 @@ impl Render for MapView {
             };
             let selected = Some(n.id.as_str()) == self.selected.as_deref();
             if working(n) && !dim(b) {
-                scene.circles.push((
-                    c,
-                    r + 9.0 * k.max(0.6) * (1.0 + 0.35 * breath),
-                    alpha(amber(), 0.05 + 0.13 * (1.0 - breath)),
-                    alpha(amber(), 0.0),
-                    0.0,
-                    false,
-                ));
-                scene.circles.push((c, r + 4.5 * k.max(0.6), alpha(amber(), 0.0), alpha(amber(), op), 2.0, true));
+                scene.circles.push(Circle {
+                    center: c,
+                    radius: r + 9.0 * k.max(0.6) * (1.0 + 0.35 * breath),
+                    fill: alpha(amber(), 0.05 + 0.13 * (1.0 - breath)),
+                    stroke: alpha(amber(), 0.0),
+                    width: 0.0,
+                    dashed: false,
+                });
+                scene.circles.push(Circle {
+                    center: c,
+                    radius: r + 4.5 * k.max(0.6),
+                    fill: alpha(amber(), 0.0),
+                    stroke: alpha(amber(), op),
+                    width: 2.0,
+                    dashed: true,
+                });
             }
             let (stroke, width) = if selected { (blue(), 2.5) } else { (stroke, width) };
-            scene.circles.push((c, r.max(1.5), alpha(fill, op), alpha(stroke, op), width, dashed && !selected));
+            scene.circles.push(Circle {
+                center: c,
+                radius: r.max(1.5),
+                fill: alpha(fill, op),
+                stroke: alpha(stroke, op),
+                width,
+                dashed: dashed && !selected,
+            });
             if n.live && !agent {
                 let dr = (r * 0.3).max(3.0);
                 let dc = point(c.x + px(r * 0.72), c.y - px(r * 0.72));
-                scene.circles.push((dc, dr, alpha(if working(n) { amber() } else { green() }, op), alpha(bg(), op), 2.5, false));
+                scene.circles.push(Circle {
+                    center: dc,
+                    radius: dr,
+                    fill: alpha(if working(n) { amber() } else { green() }, op),
+                    stroke: alpha(bg(), op),
+                    width: 2.5,
+                    dashed: false,
+                });
             }
             if !agent
                 && let (o, Some(icon)) = (crate::state::origin(n), crate::state::origin(n).icon())
@@ -750,7 +857,7 @@ impl Render for MapView {
                 // On the lower right edge, mostly outside: small bubbles stay visible.
                 let br = (r * 0.36).max(5.0);
                 let d = r * 0.71 + br * 0.45;
-                scene.badges.push((point(c.x + px(d), c.y + px(d)), br, icon, op));
+                scene.badges.push(Badge { center: point(c.x + px(d), c.y + px(d)), radius: br, icon, opacity: op });
             }
         }
 
@@ -820,34 +927,34 @@ impl Render for MapView {
             #[cfg(feature = "snapshot")]
             spots.insert(b, rect.origin.y < c.y);
             let color = alpha(if n.live { rgb(0xffffff) } else { rgb(0xcfd0dc) }, shown);
-            scene.labels.push((
-                point(c.x, rect.origin.y),
-                title,
-                font_px,
+            scene.labels.push(Label {
+                at: point(c.x, rect.origin.y),
+                text: title,
+                size: font_px,
                 color,
-                true,
-                if n.live { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM },
-            ));
+                centered: true,
+                weight: if n.live { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM },
+            });
             if in_focus && let Some(m) = n.now.as_ref().filter(|_| working(n)) {
                 let line: SharedString = clip(&format!("⟳ {} · {}", tool_name(&m.tool), m.detail), 44).into();
-                scene.labels.push((
-                    point(c.x, rect.origin.y + px(h)),
-                    line,
-                    font_px * 0.95,
-                    alpha(amber(), shown),
-                    true,
-                    FontWeight::NORMAL,
-                ));
+                scene.labels.push(Label {
+                    at: point(c.x, rect.origin.y + px(h)),
+                    text: line,
+                    size: font_px * 0.95,
+                    color: alpha(amber(), shown),
+                    centered: true,
+                    weight: FontWeight::NORMAL,
+                });
             }
             if far && self.subagents[b] > 0 {
-                scene.labels.push((
-                    point(c.x + px(r + 5.0), c.y - px(h / 2.0)),
-                    format!("+{}", self.subagents[b]).into(),
-                    font_px * 0.95,
-                    muted(),
-                    false,
-                    FontWeight::SEMIBOLD,
-                ));
+                scene.labels.push(Label {
+                    at: point(c.x + px(r + 5.0), c.y - px(h / 2.0)),
+                    text: format!("+{}", self.subagents[b]).into(),
+                    size: font_px * 0.95,
+                    color: muted(),
+                    centered: false,
+                    weight: FontWeight::SEMIBOLD,
+                });
             }
         }
         #[cfg(feature = "snapshot")]
@@ -878,7 +985,8 @@ impl Render for MapView {
                 let text: SharedString = n.project.to_uppercase().into();
                 let rect = Bounds::new(point(p.x - px(text.len() as f32 * 4.5), p.y), size(px(text.len() as f32 * 9.0), px(14.0)));
                 if !kept.iter().any(|k| k.intersects(&rect)) && !cores.iter().any(|(_, cb)| cb.intersects(&rect)) {
-                    scene.labels.insert(0, (p, text, 11.0 * k.clamp(1.0, 1.4), faint(), true, FontWeight::SEMIBOLD));
+                    let size = 11.0 * k.clamp(1.0, 1.4);
+                    scene.labels.insert(0, Label { at: p, text, size, color: faint(), centered: true, weight: FontWeight::SEMIBOLD });
                 }
             }
         }
@@ -894,10 +1002,10 @@ impl Render for MapView {
                 let t = t * t * (3.0 - 2.0 * t);
                 let mid = point((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
                 let ctrl = point(mid.x - (b.y - a.y) * 0.2, mid.y + (b.x - a.x) * 0.2);
-                scene.comets.push((quad_point(a, ctrl, b, t), c.color));
+                scene.comets.push(CometHead { center: quad_point(a, ctrl, b, t), color: c.color });
             } else {
                 let t = (e - COMET).as_secs_f32() / RIPPLE.as_secs_f32();
-                scene.ripples.push((b, self.radius[to] * k + 34.0 * t, alpha(c.color, 1.0 - t)));
+                scene.ripples.push(Ripple { center: b, radius: self.radius[to] * k + 34.0 * t, color: alpha(c.color, 1.0 - t) });
             }
         }
         fades.end();
@@ -956,12 +1064,12 @@ impl Render for MapView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|m, e: &MouseDownEvent, _, _| {
-                    m.drag = Some((e.position, m.tx, m.ty, false));
+                    m.drag = Some(Drag { start: e.position, tx: m.tx, ty: m.ty, moved: false });
                 }),
             )
             .on_mouse_move(cx.listener(|m, e: &MouseMoveEvent, _, cx| {
                 m.mouse = e.position;
-                if let Some((start, tx, ty, moved)) = m.drag.as_mut() {
+                if let Some(Drag { start, tx, ty, moved }) = m.drag.as_mut() {
                     let d = e.position - *start;
                     if *moved || (d.magnitude() as f32) > 3.0 {
                         *moved = true;
@@ -981,7 +1089,7 @@ impl Render for MapView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|m, e: &MouseUpEvent, _, cx| {
-                    let moved = m.drag.take().is_some_and(|d| d.3);
+                    let moved = m.drag.take().is_some_and(|d| d.moved);
                     if moved {
                         return;
                     }
@@ -1002,12 +1110,12 @@ impl Render for MapView {
                     m.zoom = None;
                     (m.tx, m.ty) = (m.tx + f32::from(d.x), m.ty + f32::from(d.y));
                 } else {
-                    let to = (m.zoom.map_or(m.k, |z| z.0) * (f32::from(d.y) * 0.003).exp()).clamp(0.12, 5.0);
+                    let to = (m.zoom.map_or(m.k, |z| z.to) * (f32::from(d.y) * 0.003).exp()).clamp(0.12, 5.0);
                     if e.delta.precise() || glide::off() {
                         m.zoom = None;
                         m.zoom_at(to, at);
                     } else {
-                        m.zoom = Some((to, at, Instant::now()));
+                        m.zoom = Some(Zooming { to, at, last: Instant::now() });
                     }
                 }
                 glide::trace("pan_x", m.tx);

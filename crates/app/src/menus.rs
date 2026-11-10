@@ -103,15 +103,25 @@ fn check_for_updates(cx: &mut App) {
     cx.spawn(async move |cx| {
         let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
         cx.update(|cx| {
-            let (level, title, detail) = checked(found);
-            tell(cx, level, &title, &detail, &[&t!("menu.ok")], |_, _| {});
+            let said = checked(found);
+            tell(cx, said.level, &said.title, &said.detail, &[&t!("menu.ok")], |_, _| {});
         });
     })
     .detach();
 }
 
-/// What a check found, in words: how grave, a title, a line under it.
-pub fn checked(found: crate::update::Checked) -> (PromptLevel, String, String) {
+/// What a check found, in words.
+#[derive(Clone)]
+pub struct Said {
+    /// How grave it is.
+    pub level: PromptLevel,
+    pub title: String,
+    /// The line under the title.
+    pub detail: String,
+}
+
+/// What a check found, in words.
+pub fn checked(found: crate::update::Checked) -> Said {
     use crate::update::Checked;
     let version = env!("CARGO_PKG_VERSION");
     let (level, title, detail) = match found {
@@ -122,7 +132,7 @@ pub fn checked(found: crate::update::Checked) -> (PromptLevel, String, String) {
         Checked::Off => (PromptLevel::Info, t!("update.check.off"), t!("update.check.off_detail")),
         Checked::Failed(why) => (PromptLevel::Warning, t!("update.check.failed"), why.into()),
     };
-    (level, title.into_owned(), detail.into_owned())
+    Said { level, title: title.into_owned(), detail: detail.into_owned() }
 }
 
 /// The window's own menu on Windows (its icon at the top left of the title bar, or Alt+Space): Windows draws it, and

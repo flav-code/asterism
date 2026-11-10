@@ -98,10 +98,17 @@ pub fn sync(machines: &[Machine], lang: &str) {
 }
 
 /// A machine's state, and how many sessions it has on the map.
-pub fn status(name: &str) -> Option<(Status, usize)> {
+pub struct MachineState {
+    pub status: Status,
+    pub sessions: usize,
+}
+
+/// A machine's state now; none for a machine that was never added.
+pub fn status(name: &str) -> Option<MachineState> {
     let remotes = locked(&REMOTES);
     let r = remotes.get(name)?;
-    Some((r.status.clone(), r.graph.as_ref().map_or(0, |g| g.nodes.iter().filter(|n| crate::state::is_session(n)).count())))
+    let sessions = r.graph.as_ref().map_or(0, |g| g.nodes.iter().filter(|n| crate::state::is_session(n)).count());
+    Some(MachineState { status: r.status.clone(), sessions })
 }
 
 fn set(name: &str, f: impl FnOnce(&mut Remote)) {
@@ -113,8 +120,12 @@ fn set(name: &str, f: impl FnOnce(&mut Remote)) {
 /// This computer's map and usage with the other machines'. The usage stays the same `Arc` while nothing in it
 /// changed, so the usage tab computes it again only when it must.
 pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) {
-    /// The usages it was made of (their addresses), and the result.
-    type Merged = (Vec<usize>, Option<Arc<UsageView>>);
+    /// The last merged usage, and the usages it was made of (their addresses).
+    #[derive(Default)]
+    struct Merged {
+        made_of: Vec<usize>,
+        usage: Option<Arc<UsageView>>,
+    }
     static USAGE: LazyLock<Mutex<Merged>> = LazyLock::new(Default::default);
     let remotes = locked(&REMOTES);
     let mut names: Vec<&String> = remotes.keys().collect();
@@ -127,11 +138,11 @@ pub fn merged(g: Arc<Graph>, u: Arc<UsageView>) -> (Arc<Graph>, Arc<UsageView>) 
     }
     let key: Vec<usize> = std::iter::once(Arc::as_ptr(&u) as usize).chain(usages.iter().map(|u| Arc::as_ptr(u) as usize)).collect();
     let mut cache = locked(&USAGE);
-    if cache.0 != key || cache.1.is_none() {
+    if cache.made_of != key || cache.usage.is_none() {
         let others: Vec<&UsageView> = usages.iter().map(|u| &***u).collect();
-        *cache = (key, Some(Arc::new(merge_usage(&u, &others))));
+        *cache = Merged { made_of: key, usage: Some(Arc::new(merge_usage(&u, &others))) };
     }
-    (g, cache.1.clone().expect("set above"))
+    (g, cache.usage.clone().expect("set above"))
 }
 
 /// Keeps one machine connected until it is removed: connects, installs the agent when it is missing, and after a
@@ -146,9 +157,9 @@ fn follow(m: &Machine, lang: &str, stop: &AtomicBool, ssh: &Mutex<Option<Child>>
         set(&m.name, |r| r.graph = None);
         let failed = match ended {
             Ok(None) => None,
-            Ok(Some((os, arch))) => {
+            Ok(Some(Platform { system, processor })) => {
                 set(&m.name, |r| r.status = Status::Installing);
-                match install(&m.target, &os, &arch) {
+                match install(&m.target, &system, &processor) {
                     Ok(()) => continue,
                     Err(e) => Some(e),
                 }
@@ -199,8 +210,14 @@ fn remote_command(lang: &str) -> String {
     )
 }
 
-/// One connection, until it ends. Ok(Some(system, processor)) when the agent must be installed first.
-fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child>>) -> Result<Option<(String, String)>, String> {
+/// What a machine runs, as its `uname` says it.
+struct Platform {
+    system: String,
+    processor: String,
+}
+
+/// One connection, until it ends. Ok(Some(platform)) when the agent must be installed first.
+fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child>>) -> Result<Option<Platform>, String> {
     let mut child = ssh(&m.target)
         .arg(remote_command(lang))
         .spawn()
@@ -223,7 +240,7 @@ fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child
         }
         if let Some(rest) = line.strip_prefix("asterism-install ") {
             let mut parts = rest.split_whitespace().map(str::to_string);
-            install = Some((parts.next().unwrap_or_default(), parts.next().unwrap_or_default()));
+            install = Some(Platform { system: parts.next().unwrap_or_default(), processor: parts.next().unwrap_or_default() });
             break;
         }
         // Whatever the login scripts print before the agent starts is not ours.

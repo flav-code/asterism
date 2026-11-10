@@ -3,9 +3,10 @@
 use crate::dash::{DashEvent, DashView};
 use crate::machine_view::MachineView;
 use crate::map::{MapEvent, MapView};
+use crate::menus::Said;
 use crate::panel::{self, Panel, PanelEvent};
 use crate::settings::{self, Settings};
-use crate::state::{Filters, RANGES, is_session, norm, visible, working};
+use crate::state::{Filters, RANGES, RangeChoice, is_session, norm, visible, working};
 use crate::timeline::{TimelineEvent, TimelineView};
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
@@ -159,7 +160,7 @@ pub struct Shell {
     settings_page: SettingsPage,
     settings_focus: FocusHandle,
     update_checking: bool,
-    update_answer: Option<(String, String, bool)>,
+    update_answer: Option<Said>,
     /// The machines menu's form, and the machine whose removal waits for a yes.
     machine_name: Entity<InputState>,
     machine_target: Entity<InputState>,
@@ -260,7 +261,7 @@ impl Shell {
         let tab = Tab::from(std::env::var("MDB_TAB").unwrap_or(saved.tab.clone()).as_str());
         let range = std::env::var("MDB_RANGE").unwrap_or(saved.range.clone());
         let filters = Filters {
-            range_h: RANGES.iter().find(|(label, _)| *label == range).map_or(Some(24.0), |r| r.1),
+            range_h: RANGES.iter().find(|r| r.label == range).map_or(Some(24.0), |r| r.hours),
             project: saved.project.clone(),
             archived: saved.archived,
             agents: saved.agents,
@@ -336,7 +337,7 @@ impl Shell {
     fn filter(&mut self, f: impl FnOnce(&mut Filters), cx: &mut Context<Self>) {
         f(&mut self.filters);
         let (range, project, archived, agents) = (
-            RANGES.iter().find(|r| r.1 == self.filters.range_h).map_or("24h", |r| r.0).to_string(),
+            RANGES.iter().find(|r| r.hours == self.filters.range_h).map_or("24h", |r| r.label).to_string(),
             self.filters.project.clone(),
             self.filters.archived,
             self.filters.agents,
@@ -564,9 +565,9 @@ impl Shell {
                 .hover(|s| s.bg(panel_hi()))
         };
         // The range: its button says which; the others are in its menu.
-        let range_now = RANGES.iter().find(|r| r.1 == self.filters.range_h).map_or("24h", |r| r.0);
+        let range_now = RANGES.iter().find(|r| r.hours == self.filters.range_h).map_or("24h", |r| r.label);
         let range_menu = self.range_menu.then(|| {
-            let rows = RANGES.into_iter().map(|(label, h)| {
+            let rows = RANGES.into_iter().map(|RangeChoice { label, hours: h }| {
                 item(format!("range-{label}"), self.filters.range_h == h).child(range_label(label)).on_click(cx.listener(
                     move |s, _, _, cx| {
                         s.range_menu = false;
@@ -842,7 +843,7 @@ impl Shell {
                             .child(div().h_full().rounded(px(1.0)).w(relative(done)).bg(muted())),
                     )
                 })
-                .tooltip(move |_, cx| cx.new(|_| Tip(label.clone(), sub.clone())).into())
+                .tooltip(move |_, cx| cx.new(|_| Tip { title: label.clone(), detail: sub.clone() }).into())
                 .on_click(cx.listener(|s, _, _, cx| {
                     if let State::Ready { file, .. } = &s.update {
                         match crate::update::apply(file) {
@@ -894,8 +895,12 @@ impl Shell {
     /// way, green when all are connected; none without machines.
     fn machines_dot(&self, cx: &App) -> Option<Rgba> {
         use crate::machines::Status;
-        let states: Vec<Status> =
-            cx.global::<Settings>().machines.iter().map(|m| crate::machines::status(&m.name).map_or(Status::Connecting, |s| s.0)).collect();
+        let states: Vec<Status> = cx
+            .global::<Settings>()
+            .machines
+            .iter()
+            .map(|m| crate::machines::status(&m.name).map_or(Status::Connecting, |s| s.status))
+            .collect();
         if states.iter().any(|s| matches!(s, Status::Failed(_))) {
             Some(red())
         } else if states.iter().any(|s| *s != Status::Connected) {
@@ -907,16 +912,16 @@ impl Shell {
 
     /// The other machines, in the settings: each with what it says, removed after a yes, and the form that adds one.
     fn machines_section(&self, cx: &mut Context<Self>) -> Div {
-        use crate::machines::Status;
+        use crate::machines::{MachineState, Status};
         let machines = cx.global::<Settings>().machines.clone();
-        let states: Vec<(Status, usize)> =
-            machines.iter().map(|m| crate::machines::status(&m.name).unwrap_or((Status::Connecting, 0))).collect();
+        let connecting = || MachineState { status: Status::Connecting, sessions: 0 };
+        let states: Vec<MachineState> = machines.iter().map(|m| crate::machines::status(&m.name).unwrap_or_else(connecting)).collect();
         let color_of = |s: &Status| match s {
             Status::Connected => green(),
             Status::Failed(_) => red(),
             _ => amber(),
         };
-        let rows = machines.iter().zip(&states).map(|(m, (status, sessions))| {
+        let rows = machines.iter().zip(&states).map(|(m, MachineState { status, sessions })| {
             let name = m.name.clone();
             let confirming = self.machine_remove.as_deref() == Some(m.name.as_str());
             let said = match status {
@@ -964,7 +969,9 @@ impl Shell {
                                 .text_color(faint())
                                 .hover(|s| s.text_color(text()).bg(panel_hi()))
                                 .child("✕")
-                                .tooltip(|_, cx| cx.new(|_| Tip(t!("machines.remove").into_owned(), String::new())).into())
+                                .tooltip(|_, cx| {
+                                    cx.new(|_| Tip { title: t!("machines.remove").into_owned(), detail: String::new() }).into()
+                                })
                                 .on_click(cx.listener(move |s, _, _, cx| {
                                     s.machine_remove = Some(name.clone());
                                     cx.notify();
@@ -1035,7 +1042,9 @@ impl Shell {
             .when(invalid.is_none(), |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
             .child(t!("machines.add").into_owned())
             // A grey button says why it is grey.
-            .when_some(invalid.clone(), |d, why| d.tooltip(move |_, cx| cx.new(|_| Tip(why.clone(), String::new())).into()))
+            .when_some(invalid.clone(), |d, why| {
+                d.tooltip(move |_, cx| cx.new(|_| Tip { title: why.clone(), detail: String::new() }).into())
+            })
             .on_click(cx.listener(|s, _, window, cx| s.add_machine(window, cx)));
         div().flex().flex_col().gap(px(2.0)).children(rows).child(
             div()
@@ -1074,7 +1083,9 @@ impl Shell {
             .hover(|s| s.bg(panel_hi()))
             .child(crate::icons::line(gpui_kit::assets::IconName::Settings, muted(), 15.0))
             .children(dot.map(|c| div().absolute().top(px(5.0)).right(px(5.0)).size(px(6.0)).rounded_full().bg(c)))
-            .tooltip(|_, cx| cx.new(|_| Tip(t!("settings.title").into_owned(), t!("settings.button_sub").into_owned())).into())
+            .tooltip(|_, cx| {
+                cx.new(|_| Tip { title: t!("settings.title").into_owned(), detail: t!("settings.button_sub").into_owned() }).into()
+            })
             .on_click(cx.listener(|s, _, window, cx| s.open_settings(window, cx)))
             .into_any_element()
     }
@@ -1109,8 +1120,7 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
             this.update(cx, |s, cx| {
-                let (level, title, detail) = crate::menus::checked(found);
-                (s.update_checking, s.update_answer) = (false, Some((title, detail, level == PromptLevel::Warning)));
+                (s.update_checking, s.update_answer) = (false, Some(crate::menus::checked(found)));
                 cx.notify();
             })
             .ok();
@@ -1186,7 +1196,8 @@ impl Shell {
             .when(!self.update_checking, |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
             .child(if self.update_checking { t!("settings.checking") } else { t!("settings.check") }.into_owned())
             .on_click(cx.listener(|s, _, _, cx| s.check_updates(cx)));
-        let answer = self.update_answer.clone().map(|(title, detail, warning)| {
+        let answer = self.update_answer.clone().map(|Said { level, title, detail }| {
+            let warning = level == PromptLevel::Warning;
             div()
                 .flex_1()
                 .min_w_0()
@@ -1975,7 +1986,10 @@ pub fn open_settings(cx: &mut App) {
 }
 
 /// A small hover card: a title and a line under it.
-struct Tip(String, String);
+struct Tip {
+    title: String,
+    detail: String,
+}
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -1987,7 +2001,7 @@ impl Render for Tip {
             .border_color(line())
             .text_size(px(12.0))
             .text_color(text())
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(self.0.clone()))
-            .when(!self.1.is_empty(), |d| d.child(div().text_color(muted()).child(self.1.clone())))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(self.title.clone()))
+            .when(!self.detail.is_empty(), |d| d.child(div().text_color(muted()).child(self.detail.clone())))
     }
 }

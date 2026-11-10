@@ -30,16 +30,55 @@ pub enum TimelineEvent {
 /// What the rows show, worked out once per data update.
 #[derive(Default)]
 struct Layout {
-    /// Graph node and indent per row.
-    rows: Vec<(usize, usize)>,
+    rows: Vec<Row>,
     /// Graph node → row; a subagent shares its session's row.
     row_of: HashMap<usize, usize>,
     /// Subagents with a row.
     agents: Vec<usize>,
-    /// Spawn and fork edges: from row, to row, the new session.
-    links: Vec<(usize, usize, usize, EdgeKind)>,
-    /// Messages between two rows: message, from row, to row.
-    msgs: Vec<(usize, usize, usize)>,
+    /// Spawn and fork edges.
+    links: Vec<RowLink>,
+    /// Messages between two rows.
+    msgs: Vec<RowMsg>,
+}
+
+/// A row: its session (a graph node) and its indent under the session that started it.
+#[derive(Clone, Copy)]
+struct Row {
+    node: usize,
+    depth: usize,
+}
+
+/// A session started or forked from another: both rows, and the new session (a graph node).
+#[derive(Clone, Copy)]
+struct RowLink {
+    from: usize,
+    to: usize,
+    node: usize,
+    kind: EdgeKind,
+}
+
+/// A message (its index in the graph) between two rows.
+#[derive(Clone, Copy)]
+struct RowMsg {
+    msg: usize,
+    from: usize,
+    to: usize,
+}
+
+/// A wheel zoom on its way: the zoom it goes to, the x that stays put, and when the last frame moved it.
+#[derive(Clone, Copy)]
+struct Zooming {
+    to: f32,
+    at: f32,
+    last: Instant,
+}
+
+/// The chart held by the mouse: where it was pressed, the shift it had then, and whether the pointer moved since (a
+/// press that did not is a click).
+struct Drag {
+    start_x: Pixels,
+    tx: f32,
+    moved: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -56,14 +95,14 @@ pub struct TimelineView {
     /// Time zoom and shift, as d3: x = tx + k × x at zoom 1.
     k: f32,
     tx: f32,
-    zoom: Option<(f32, f32, Instant)>,
+    zoom: Option<Zooming>,
     scroll: Glide,
     /// Where the rows were drawn last frame, in window coordinates.
     chart: Rc<Cell<Bounds<Pixels>>>,
     hover: Option<Hover>,
     hover_row: Option<usize>,
     mouse: Point<Pixels>,
-    drag: Option<(Pixels, f32, bool)>,
+    drag: Option<Drag>,
     pub selected: Option<String>,
     pub active: bool,
     /// Messages that arrived while the tab was open, and when they first showed: they blink.
@@ -83,7 +122,7 @@ impl TimelineView {
             loop {
                 cx.background_executor().timer(Duration::from_millis(83)).await;
                 let alive = this.update(cx, |t, cx| {
-                    let moving = t.layout.rows.iter().any(|r| t.graph.as_ref().is_some_and(|g| working(&g.nodes[r.0])));
+                    let moving = t.layout.rows.iter().any(|r| t.graph.as_ref().is_some_and(|g| working(&g.nodes[r.node])));
                     if t.active && (moving || !t.fresh.is_empty() || t.last_paint.elapsed() > Duration::from_secs(5)) {
                         cx.notify();
                     }
@@ -135,18 +174,11 @@ impl TimelineView {
         }
         let mut rows = Vec::new();
         let mut done = HashSet::new();
-        fn visit(
-            n: usize,
-            depth: usize,
-            g: &Graph,
-            kids: &HashMap<usize, Vec<usize>>,
-            done: &mut HashSet<usize>,
-            rows: &mut Vec<(usize, usize)>,
-        ) {
+        fn visit(n: usize, depth: usize, g: &Graph, kids: &HashMap<usize, Vec<usize>>, done: &mut HashSet<usize>, rows: &mut Vec<Row>) {
             if !done.insert(n) {
                 return;
             }
-            rows.push((n, depth));
+            rows.push(Row { node: n, depth });
             let mut under = kids.get(&n).cloned().unwrap_or_default();
             under.sort_by_key(|&k| g.nodes[k].created_at);
             for k in under {
@@ -163,9 +195,9 @@ impl TimelineView {
         let mut outside: Vec<usize> =
             v.nodes.iter().copied().filter(|&i| matches!(g.nodes[i].kind, NodeKind::Ghost | NodeKind::Remote)).collect();
         outside.sort_by_key(|&i| g.nodes[i].created_at);
-        rows.extend(outside.into_iter().map(|node| (node, 0)));
+        rows.extend(outside.into_iter().map(|node| Row { node, depth: 0 }));
 
-        let mut row_of: HashMap<usize, usize> = rows.iter().enumerate().map(|(r, row)| (row.0, r)).collect();
+        let mut row_of: HashMap<usize, usize> = rows.iter().enumerate().map(|(r, row)| (row.node, r)).collect();
         for &i in &v.nodes {
             let n = &g.nodes[i];
             if n.kind == NodeKind::Agent
@@ -190,13 +222,13 @@ impl TimelineView {
             .iter()
             .map(|&e| &g.edges[e])
             .filter(|e| matches!(e.kind, EdgeKind::Spawn | EdgeKind::Fork))
-            .filter_map(|e| Some((row(&e.from)?, row(&e.to)?, *shown.get(e.to.as_str())?, e.kind)))
+            .filter_map(|e| Some(RowLink { from: row(&e.from)?, to: row(&e.to)?, node: *shown.get(e.to.as_str())?, kind: e.kind }))
             .collect();
         let msgs = v
             .messages
             .iter()
-            .filter_map(|&m| Some((m, row(&g.messages[m].from)?, row(&g.messages[m].to)?)))
-            .filter(|(_, a, b)| a != b)
+            .filter_map(|&m| Some(RowMsg { msg: m, from: row(&g.messages[m].from)?, to: row(&g.messages[m].to)? }))
+            .filter(|m| m.from != m.to)
             .collect();
         self.colors = project_colors(&g);
         self.layout = Rc::new(Layout { rows, row_of, agents, links, msgs });
@@ -230,14 +262,14 @@ impl TimelineView {
         let (x, y) = (f32::from(p.x - b.origin.x), f32::from(p.y - b.origin.y));
         let row = ((y / ROW) as usize).min(l.rows.len() - 1);
         if x < LEFT {
-            return (Some(row), Some(Hover::Node(l.rows[row].0)));
+            return (Some(row), Some(Hover::Node(l.rows[row].node)));
         }
         let now = now_ms();
         let s = self.scale(f32::from(b.size.width), now);
         let cy = |r: usize| r as f32 * ROW + ROW / 2.0;
         // An arc within 5 px, measured along the curve.
         let mut best = (5.0, None);
-        for &(m, r1, r2) in &l.msgs {
+        for &RowMsg { msg: m, from: r1, to: r2 } in &l.msgs {
             let (y1, y2) = (cy(r1), cy(r2));
             if y < y1.min(y2) || y > y1.max(y2) {
                 continue;
@@ -252,10 +284,10 @@ impl TimelineView {
             return (Some(row), Some(Hover::Msg(m)));
         }
         // A bar, or a subagent's line under it.
-        let n = &g.nodes[l.rows[row].0];
+        let n = &g.nodes[l.rows[row].node];
         let (x0, x1) = (s.at(n.created_at.max(1) as f64), s.at(if n.live { now } else { n.last_at.max(n.created_at) } as f64));
         if (y - cy(row)).abs() <= 6.0 && x >= x0 - 2.0 && x <= x1.max(x0 + 3.0) + 2.0 {
-            return (Some(row), Some(Hover::Node(l.rows[row].0)));
+            return (Some(row), Some(Hover::Node(l.rows[row].node)));
         }
         for &i in l.agents.iter().filter(|i| l.row_of.get(i) == Some(&row)) {
             let a = &g.nodes[i];
@@ -425,7 +457,7 @@ impl Render for TimelineView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_paint = Instant::now();
         self.fresh.retain(|_, at| at.elapsed() < BLINK);
-        if let Some((to, at, last)) = self.zoom {
+        if let Some(Zooming { to, at, last }) = self.zoom {
             let now = Instant::now();
             let k = glide::ease(self.k.ln(), to.ln(), (now - last).as_secs_f32()).exp();
             if (k / to - 1.0).abs() < 0.002 {
@@ -433,7 +465,7 @@ impl Render for TimelineView {
                 self.zoom = None;
             } else {
                 self.zoom_at(k, at);
-                self.zoom = Some((to, at, now));
+                self.zoom = Some(Zooming { to, at, last: now });
                 crate::glide::again(window, cx);
             }
         }
@@ -543,7 +575,8 @@ impl Render for TimelineView {
                     ContentMask { bounds: Bounds::new(o + point(px(LEFT), px(0.0)), size(px((w - LEFT).max(0.0)), b.size.height)) };
                 window.with_content_mask(Some(chart_mask), |window| {
                     // Bars, and the stripes of the sessions working now.
-                    for (r, &(i, _)) in l.rows.iter().enumerate().filter(|(r, _)| on_screen(*r)) {
+                    let rows_on_screen = l.rows.iter().enumerate().filter(|(r, _)| on_screen(*r));
+                    for (r, &Row { node: i, .. }) in rows_on_screen {
                         let n = &g.nodes[i];
                         let x0 = s.at(if n.created_at > 0 { n.created_at as f64 } else { s.start });
                         let x1 = s.at(if n.live { now } else { n.last_at.max(n.created_at) } as f64);
@@ -592,7 +625,7 @@ impl Render for TimelineView {
                         rect(window, x0, cy(r) + 7.0, x1 - x0, 2.0, o, alpha(if n.live { amber() } else { color(i) }, 0.8));
                     }
                     // Started and forked sessions: a line down to the new session's row.
-                    for &(r1, r2, to, kind) in &l.links {
+                    for &RowLink { from: r1, to: r2, node: to, kind } in &l.links {
                         let (y1, y2) = (cy(r1), cy(r2) - 6.0);
                         if y1.max(y2) < top || y1.min(y2) > bottom {
                             continue;
@@ -611,7 +644,7 @@ impl Render for TimelineView {
                         arrow(window, at(x, y2), at(x, y1), c);
                     }
                     // Messages: an arc from the sender's row to the receiver's, bulging right.
-                    for &(m, r1, r2) in &l.msgs {
+                    for &RowMsg { msg: m, from: r1, to: r2 } in &l.msgs {
                         let msg = &g.messages[m];
                         let (y1, y2) = (cy(r1), cy(r2));
                         if y1.max(y2) < top || y1.min(y2) > bottom {
@@ -654,7 +687,8 @@ impl Render for TimelineView {
                 });
                 // The labels' column, the row backgrounds, then dots and titles.
                 rect(window, 0.0, top.max(0.0), LEFT, bottom - top.max(0.0), o, rgb(0x0b0c12));
-                for (r, &(i, depth)) in l.rows.iter().enumerate().filter(|(r, _)| on_screen(*r)) {
+                let rows_on_screen = l.rows.iter().enumerate().filter(|(r, _)| on_screen(*r));
+                for (r, &Row { node: i, depth }) in rows_on_screen {
                     let n = &g.nodes[i];
                     let y = r as f32 * ROW;
                     let tint = if selected.as_deref() == Some(n.id.as_str()) {
@@ -762,13 +796,13 @@ impl Render for TimelineView {
                 MouseButton::Left,
                 cx.listener(|t, e: &MouseDownEvent, _, _| {
                     if f32::from(e.position.x - t.chart.get().origin.x) >= LEFT {
-                        t.drag = Some((e.position.x, t.tx, false));
+                        t.drag = Some(Drag { start_x: e.position.x, tx: t.tx, moved: false });
                     }
                 }),
             )
             .on_mouse_move(cx.listener(|t, e: &MouseMoveEvent, _, cx| {
                 t.mouse = e.position;
-                if let Some((x0, tx0, moved)) = t.drag.as_mut()
+                if let Some(Drag { start_x: x0, tx: tx0, moved }) = t.drag.as_mut()
                     && e.pressed_button == Some(MouseButton::Left)
                 {
                     let dx = f32::from(e.position.x - *x0);
@@ -787,7 +821,7 @@ impl Render for TimelineView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|t, e: &MouseUpEvent, _, cx| {
-                    let moved = t.drag.take().is_some_and(|d| d.2);
+                    let moved = t.drag.take().is_some_and(|d| d.moved);
                     if moved {
                         return;
                     }
@@ -795,7 +829,7 @@ impl Render for TimelineView {
                     let id = match t.hit(e.position) {
                         (_, Some(Hover::Node(i))) => g.map(|g| g.nodes[i].id.clone()),
                         (_, Some(Hover::Msg(m))) => g.map(|g| g.messages[m].from.clone()),
-                        (Some(r), None) => g.map(|g| g.nodes[t.layout.rows[r].0].id.clone()),
+                        (Some(r), None) => g.map(|g| g.nodes[t.layout.rows[r].node].id.clone()),
                         _ => return,
                     };
                     t.select(id, cx);
@@ -825,12 +859,12 @@ fn zoom_driver(view: Entity<TimelineView>) -> impl IntoElement {
                     let d = e.delta.pixel_delta(line);
                     let m = e.modifiers;
                     if m.platform || m.control || m.alt {
-                        let to = (t.zoom.map_or(t.k, |z| z.0) * (f32::from(d.y) * 0.003).exp()).clamp(1.0, 400.0);
+                        let to = (t.zoom.map_or(t.k, |z| z.to) * (f32::from(d.y) * 0.003).exp()).clamp(1.0, 400.0);
                         if e.delta.precise() || glide::off() {
                             t.zoom = None;
                             t.zoom_at(to, x);
                         } else {
-                            t.zoom = Some((to, x, Instant::now()));
+                            t.zoom = Some(Zooming { to, at: x, last: Instant::now() });
                         }
                     } else if e.delta.precise() && d.x.abs() > d.y.abs() {
                         t.tx += f32::from(d.x);

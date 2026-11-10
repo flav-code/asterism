@@ -8,14 +8,21 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 pub const PALETTE: [u32; 8] = [0x7c9cff, 0xff9f6b, 0xe879f9, 0xa3e635, 0x2dd4bf, 0xfacc15, 0xfda4af, 0x93c5fd];
-pub const RANGES: [(&str, Option<f64>); 7] = [
-    ("6h", Some(6.0)),
-    ("24h", Some(24.0)),
-    ("3d", Some(72.0)),
-    ("7d", Some(168.0)),
-    ("14d", Some(336.0)),
-    ("30d", Some(720.0)),
-    ("All", None),
+/// A choice of the range menu: its label, and its hours (none: everything).
+#[derive(Clone, Copy)]
+pub struct RangeChoice {
+    pub label: &'static str,
+    pub hours: Option<f64>,
+}
+
+pub const RANGES: [RangeChoice; 7] = [
+    RangeChoice { label: "6h", hours: Some(6.0) },
+    RangeChoice { label: "24h", hours: Some(24.0) },
+    RangeChoice { label: "3d", hours: Some(72.0) },
+    RangeChoice { label: "7d", hours: Some(168.0) },
+    RangeChoice { label: "14d", hours: Some(336.0) },
+    RangeChoice { label: "30d", hours: Some(720.0) },
+    RangeChoice { label: "All", hours: None },
 ];
 
 #[derive(Clone, Debug, PartialEq)]
