@@ -230,6 +230,8 @@
       "all": "Toutes"
     },
     "legend": {
+      "title": "Légende",
+      "fold": "Replier la légende",
       "working": "au travail",
       "idle": "ouverte, au repos",
       "closed": "fermée",

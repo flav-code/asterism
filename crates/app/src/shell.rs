@@ -2589,9 +2589,9 @@ pub fn check_for_updates(cx: &mut App) {
 }
 
 /// A small hover card: a title and a line under it.
-struct Tip {
-    title: String,
-    detail: String,
+pub(crate) struct Tip {
+    pub(crate) title: String,
+    pub(crate) detail: String,
 }
 
 impl Render for Tip {

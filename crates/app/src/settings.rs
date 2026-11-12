@@ -14,6 +14,8 @@ pub struct Settings {
     pub archived: bool,
     pub agents: bool,
     pub titles: String,
+    /// The map's legend is unfolded.
+    pub legend: bool,
     pub panel: bool,
     pub feed: bool,
     /// The feed's height in the side panel, in points (its lines, under its title).
@@ -46,6 +48,7 @@ impl Default for Settings {
             archived: true,
             agents: true,
             titles: "hover".into(),
+            legend: true,
             panel: true,
             feed: true,
             feed_h: 240.0,
@@ -116,6 +119,7 @@ impl Settings {
             archived: b("archived", d.archived),
             agents: b("agents", d.agents),
             titles: s("map_titles", &d.titles),
+            legend: b("map_legend", d.legend),
             panel: b("panel", d.panel),
             feed: b("feed", d.feed),
             feed_h: v.get("feed_h").and_then(Value::as_f64).map(|h| h as f32).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(d.feed_h),
@@ -145,7 +149,7 @@ impl Settings {
         }
         let v = json!({
             "tab": self.tab, "range": self.range, "project": self.project, "archived": self.archived, "agents": self.agents,
-            "map_titles": self.titles, "panel": self.panel, "feed": self.feed, "feed_h": self.feed_h,
+            "map_titles": self.titles, "map_legend": self.legend, "panel": self.panel, "feed": self.feed, "feed_h": self.feed_h,
             "usage_range": self.usage_range, "usage_metric": self.usage_metric, "language": self.language,
             "machines": self.machines.iter().map(|m| json!({ "name": m.name, "target": m.target })).collect::<Vec<_>>(),
             "seen_version": self.seen_version,

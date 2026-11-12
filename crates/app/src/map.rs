@@ -93,6 +93,9 @@ pub struct MapView {
     _breath: Task<()>,
     fades: glide::Fades,
     titles_seg: Seg,
+    /// The legend is unfolded; in a narrow window it starts folded, and its own choice lasts until the app quits.
+    legend_open: bool,
+    legend_narrow_open: bool,
     /// A hash of each body's session id: the key of its fades.
     hashes: Vec<u64>,
     /// New bubbles are finding their place while the others hold still; these may move.
@@ -224,6 +227,8 @@ impl MapView {
             _breath: breath,
             fades: glide::Fades::default(),
             titles_seg: Seg::default(),
+            legend_open: cx.global::<Settings>().legend,
+            legend_narrow_open: false,
             hashes: Vec::new(),
             newcomers: HashSet::new(),
             #[cfg(feature = "snapshot")]
@@ -705,6 +710,56 @@ fn paint(scene: Scene, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App
     }
 }
 
+impl MapView {
+    /// The legend, at the bottom right: unfolded with a small button that folds it, or folded into a small square
+    /// that unfolds it. A narrow window starts with it folded.
+    fn legend(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let narrow = f32::from(self.canvas.get().size.width) < 680.0;
+        let open = if narrow { self.legend_narrow_open } else { self.legend_open };
+        // A press on the legend's button is not a press on the map: no drag starts, no bubble is unselected.
+        let button = |id: &'static str, icon: IconName, said: std::borrow::Cow<'static, str>| {
+            let said = said.into_owned();
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgba(0xffffff14)))
+                .child(crate::icons::line(icon, muted(), 13.0))
+                .tooltip(move |_, cx| cx.new(|_| crate::shell::Tip { title: said.clone(), detail: String::new() }).into())
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |m, _, _, cx| {
+                    if narrow {
+                        m.legend_narrow_open = !open;
+                    } else {
+                        m.legend_open = !open;
+                        settings::change(cx, |s| s.legend = !open);
+                    }
+                    cx.notify();
+                }))
+        };
+        let frame = div()
+            .id("legend")
+            .absolute()
+            .right(px(16.0))
+            .bottom(px(16.0))
+            .rounded(px(12.0))
+            .bg(rgba(0x11121ad0))
+            .border_1()
+            .border_color(line());
+        if open {
+            frame.p(px(10.0)).pr(px(34.0)).child(legend_items()).child(
+                button("legend-fold", IconName::Minimize2, t!("map.legend.fold")).absolute().top(px(6.0)).right(px(6.0)).size(px(22.0)),
+            )
+        } else {
+            frame.rounded(px(10.0)).child(button("legend-unfold", IconName::Shapes, t!("map.legend.title")).size(px(30.0)))
+        }
+    }
+}
+
 impl Render for MapView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(Zooming { to, at, last }) = self.zoom {
@@ -1157,13 +1212,13 @@ impl Render for MapView {
                     .child(div().text_size(px(11.0)).text_color(faint()).child(t!("map.titles.label").to_string()))
                     .child(titles_control),
             )
-            // Narrow, the legend would cover the live feed: it goes.
-            .when(f32::from(self.canvas.get().size.width) >= 680.0, |d| d.child(legend()))
+            .child(self.legend(cx))
             .children(tip)
     }
 }
 
-fn legend() -> Div {
+/// What the map's colors and shapes mean, on two columns.
+fn legend_items() -> Div {
     // Every swatch sits in the middle of a slot as wide as the widest, so the texts start on one column.
     let item = |swatch: Div, label: Cow<str>| {
         let slot = div().w(px(14.0)).flex_none().flex().justify_center().child(swatch);
@@ -1184,14 +1239,6 @@ fn legend() -> Div {
             .child(crate::icons::line(icon, rgb(0xe4e5ee), 9.0))
     };
     div()
-        .absolute()
-        .right(px(16.0))
-        .bottom(px(16.0))
-        .p(px(10.0))
-        .rounded(px(12.0))
-        .bg(rgba(0x11121ad0))
-        .border_1()
-        .border_color(line())
         .grid()
         .grid_cols(2)
         .gap_x(px(16.0))

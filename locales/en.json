@@ -230,6 +230,8 @@
       "all": "All"
     },
     "legend": {
+      "title": "Legend",
+      "fold": "Fold the legend",
       "working": "working",
       "idle": "open, idle",
       "closed": "closed",
