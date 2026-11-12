@@ -98,17 +98,9 @@ fn about(cx: &mut App) {
     });
 }
 
-/// Checks now, off the main thread, then says what it found. A newer version downloads first: the green arrow shows
-/// its progress meanwhile.
+/// Checks now, in the settings' updates page: the answer is in the app's own window, not in a system dialog.
 fn check_for_updates(cx: &mut App) {
-    cx.spawn(async move |cx| {
-        let found = cx.background_executor().spawn(async { crate::update::check_now() }).await;
-        cx.update(|cx| {
-            let said = checked(found);
-            tell(cx, said.level, &said.title, &said.detail, &[&t!("menu.ok")], |_, _| {});
-        });
-    })
-    .detach();
+    crate::shell::check_for_updates(cx);
 }
 
 /// What a check found, in words.

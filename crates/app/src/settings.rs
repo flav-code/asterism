@@ -24,6 +24,8 @@ pub struct Settings {
     pub language: Option<String>,
     /// Other machines whose sessions show too, reached over SSH (see `machines`).
     pub machines: Vec<Machine>,
+    /// The version that last ran here: a newer one shows what it brings, once.
+    pub seen_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +53,7 @@ impl Default for Settings {
             usage_metric: "usd".into(),
             language: None,
             machines: Vec::new(),
+            seen_version: None,
         }
     }
 }
@@ -120,6 +123,7 @@ impl Settings {
                 .filter_map(|m| Some(Machine { name: m.get("name")?.as_str()?.into(), target: m.get("target")?.as_str()?.into() }))
                 .filter(|m| crate::machines::check(&m.name, &m.target, &[]).is_ok())
                 .collect(),
+            seen_version: v.get("seen_version").and_then(Value::as_str).map(str::to_string),
         }
     }
 
@@ -132,6 +136,7 @@ impl Settings {
             "map_titles": self.titles, "panel": self.panel, "feed": self.feed, "feed_h": self.feed_h,
             "usage_range": self.usage_range, "usage_metric": self.usage_metric, "language": self.language,
             "machines": self.machines.iter().map(|m| json!({ "name": m.name, "target": m.target })).collect::<Vec<_>>(),
+            "seen_version": self.seen_version,
         });
         let dir = data_dir();
         // A lost setting is only a default next time: no need to bother anyone with an error.

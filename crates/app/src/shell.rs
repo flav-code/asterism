@@ -167,6 +167,14 @@ pub struct Shell {
     settings_focus: FocusHandle,
     update_checking: bool,
     update_answer: Option<Said>,
+    /// The window about a version, over the app: a new one to install, or what the one just installed brings.
+    version_window: Option<VersionWindow>,
+    version_focus: FocusHandle,
+    /// Why the update could not be installed, said in its window.
+    update_failed: Option<String>,
+    /// "What's new" of the settings: its notes are being asked, or why they could not be had.
+    notes_loading: bool,
+    notes_failed: Option<String>,
     /// The machines menu's form, and the machine whose removal waits for a yes.
     machine_name: Entity<InputState>,
     machine_target: Entity<InputState>,
@@ -308,6 +316,11 @@ impl Shell {
             settings_focus: cx.focus_handle(),
             update_checking: false,
             update_answer: None,
+            version_window: None,
+            version_focus: cx.focus_handle(),
+            update_failed: None,
+            notes_loading: false,
+            notes_failed: None,
             machine_name,
             machine_target,
             machine_remove: None,
@@ -318,11 +331,41 @@ impl Shell {
             replay: None,
             update: update::State::Idle,
             clock_bar: Rc::default(),
-            _tasks: vec![updates_task, new_version],
+            _tasks: vec![updates_task, new_version, Self::greet_new_version(saved.seen_version.as_deref(), window, cx)],
             _subs: subs,
             #[cfg(feature = "snapshot")]
             snapshot_taken: false,
         }
+    }
+
+    /// The first launch of a version after another one shows what it brings, once: its notes are asked from GitHub,
+    /// and asked again at the next launch if that fails. A first install shows nothing.
+    fn greet_new_version(seen: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        // Snapshot builds keep no settings: MDB_ACTION=whatsnew plays the launch after an update.
+        let replayed = cfg!(feature = "snapshot") && std::env::var("MDB_ACTION").as_deref() == Ok("whatsnew");
+        if seen == Some(VERSION) && !replayed {
+            return Task::ready(());
+        }
+        if seen.is_none() && !replayed {
+            settings::change(cx, |s| s.seen_version = Some(VERSION.to_string()));
+            return Task::ready(());
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let notes = match cx.background_executor().spawn(async { update::notes_of(VERSION) }).await {
+                Ok(notes) => notes,
+                Err(e) => return eprintln!("release notes: {e}"),
+            };
+            this.update_in(cx, |s, window, cx| {
+                settings::change(cx, |st| st.seen_version = Some(VERSION.to_string()));
+                if !notes.sections.is_empty() {
+                    s.version_window = Some(VersionWindow::WhatsNew(notes));
+                    s.version_focus.focus(window, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
     }
 
     /// Hands the latest data and filters to the views.
@@ -808,7 +851,7 @@ impl Shell {
     }
 
     /// A newer version, at the top right: a grey arrow with its progress while it downloads, then green; a click
-    /// installs it and starts the app again.
+    /// opens the window that says what it brings and installs it.
     fn update_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::update::State;
         let (ready, label, done) = match &self.update {
@@ -850,12 +893,11 @@ impl Shell {
                     )
                 })
                 .tooltip(move |_, cx| cx.new(|_| Tip { title: label.clone(), detail: sub.clone() }).into())
-                .on_click(cx.listener(|s, _, _, cx| {
-                    if let State::Ready { file, .. } = &s.update {
-                        match update::apply(file) {
-                            Ok(()) => cx.quit(),
-                            Err(e) => eprintln!("update: {e}"),
-                        }
+                .on_click(cx.listener(|s, _, window, cx| {
+                    if matches!(s.update, State::Ready { .. }) {
+                        (s.version_window, s.update_failed) = (Some(VersionWindow::Ready), None);
+                        s.version_focus.focus(window, cx);
+                        cx.notify();
                     }
                 }))
                 .with_animation("update-in", Animation::new(Duration::from_millis(300)).with_easing(ease_in_out), |el, t| el.opacity(t))
@@ -1134,6 +1176,248 @@ impl Shell {
         .detach();
     }
 
+    /// "What's new" of the settings: asks this version's notes from GitHub and shows them in the version window.
+    fn show_whats_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.notes_loading {
+            return;
+        }
+        (self.notes_loading, self.notes_failed) = (true, None);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let found = cx.background_executor().spawn(async { update::notes_of(env!("CARGO_PKG_VERSION")) }).await;
+            this.update_in(cx, |s, window, cx| {
+                s.notes_loading = false;
+                match found {
+                    Ok(notes) => {
+                        (s.settings_open, s.version_window) = (false, Some(VersionWindow::WhatsNew(notes)));
+                        s.version_focus.focus(window, cx);
+                    }
+                    Err(why) => s.notes_failed = Some(t!("version.notes_failed", why = why).into_owned()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Check for Updates…" of the system's menus: the settings open on their updates page and check, so the answer
+    /// is in the app's own window.
+    fn check_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
+        self.settings_page = SettingsPage::Updates;
+        self.check_updates(cx);
+    }
+
+    /// The window about a version, over the app: the notes of its release, by section, under its name and date.
+    /// For a version to install: Later, or Restart and update. Only a button, ✕ or Esc closes it: a click beside it
+    /// must not make the notes go unread.
+    fn version_window(&self, which: &VersionWindow, cx: &mut Context<Self>) -> AnyElement {
+        let close = |s: &mut Shell, cx: &mut Context<Shell>| {
+            (s.version_window, s.update_failed) = (None, None);
+            cx.notify();
+        };
+        let ready = matches!(which, VersionWindow::Ready);
+        let notes = match (which, &self.update) {
+            (VersionWindow::WhatsNew(notes), _) => notes.clone(),
+            (VersionWindow::Ready, update::State::Ready { notes, .. }) => notes.clone(),
+            _ => update::Notes::default(),
+        };
+        let title = if ready { t!("version.ready", version = notes.version) } else { t!("version.whats_new", version = notes.version) };
+        let date =
+            chrono::NaiveDate::parse_from_str(&notes.date, "%Y-%m-%d").ok().map(|d| d.format(&i18n::names(&d, "%-d %b %Y")).to_string());
+        let sections = notes.sections.iter().map(|section| {
+            // The notes are written in English; the two usual titles are said in the app's language.
+            let (label, color) = match section.title.as_str() {
+                "New" => (t!("version.new").into_owned(), green()),
+                "Fixed" => (t!("version.fixed").into_owned(), amber()),
+                other => (other.to_string(), blue()),
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div().flex().child(
+                        div()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded(px(6.0))
+                            .bg(alpha(color, 0.14))
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color)
+                            .child(label.to_uppercase()),
+                    ),
+                )
+                .children(section.items.iter().map(|item| {
+                    // Indented like a list under its heading: the dots start where the heading's text does.
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(10.0))
+                        .pl(px(8.0))
+                        .child(div().mt(px(7.0)).size(px(5.0)).flex_none().rounded_full().bg(color))
+                        .child(div().flex_1().min_w_0().text_size(px(13.0)).line_height(px(19.0)).text_color(text()).child(item.clone()))
+                }))
+        });
+        let on_github = div()
+            .id("version-github")
+            .text_size(px(12.0))
+            .text_color(blue())
+            .cursor_pointer()
+            .hover(|s| s.underline())
+            .child(t!("version.on_github").into_owned())
+            .on_click(cx.listener({
+                let url = format!("https://github.com/{}/releases/tag/v{}", update::REPO, notes.version);
+                move |_, _, _, cx| cx.open_url(&url)
+            }));
+        let button = |id: &'static str, label: String, primary: bool| {
+            div()
+                .id(id)
+                .px(px(14.0))
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .text_size(px(13.0))
+                .border_1()
+                .when(primary, |d| {
+                    d.bg(rgba(0x4ade8026))
+                        .border_color(rgba(0x4ade8066))
+                        .text_color(green())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .hover(|s| s.bg(rgba(0x4ade803d)))
+                })
+                .when(!primary, |d| d.border_color(line()).text_color(muted()).hover(|s| s.bg(panel_hi()).text_color(text())))
+                .child(label)
+        };
+        let buttons = if ready {
+            div()
+                .flex()
+                .gap(px(8.0))
+                .child(
+                    button("version-later", t!("version.later").into_owned(), false).on_click(cx.listener(move |s, _, _, cx| close(s, cx))),
+                )
+                .child(button("version-restart", t!("version.restart").into_owned(), true).on_click(cx.listener(|s, _, _, cx| {
+                    let update::State::Ready { file, .. } = &s.update else { return };
+                    match update::apply(file) {
+                        Ok(()) => cx.quit(),
+                        Err(why) => {
+                            s.update_failed = Some(why);
+                            cx.notify();
+                        }
+                    }
+                })))
+        } else {
+            div()
+                .flex()
+                .child(button("version-ok", t!("menu.ok").into_owned(), true).on_click(cx.listener(move |s, _, _, cx| close(s, cx))))
+        };
+        let card = div()
+            .id("version")
+            .track_focus(&self.version_focus)
+            .on_key_down(cx.listener(move |s, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
+                    close(s, cx);
+                }
+            }))
+            .relative()
+            .w(px(540.0))
+            .max_w(relative(0.94))
+            .max_h(relative(0.86))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(px(14.0))
+            .bg(panel())
+            .border_1()
+            .border_color(rgba(0xffffff1f))
+            .shadow_lg()
+            .child(
+                div()
+                    .px(px(26.0))
+                    .pt(px(24.0))
+                    .pb(px(16.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .size(px(36.0))
+                            .flex_none()
+                            .rounded(px(10.0))
+                            .bg(rgba(0x4ade801f))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(crate::icons::line(IconName::Download, green(), 18.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(px(17.0)).font_weight(FontWeight::SEMIBOLD).text_color(text()).child(title.into_owned()))
+                            .children(date.map(|d| div().mt(px(2.0)).text_size(px(12.0)).text_color(faint()).child(d))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("version-notes")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(26.0))
+                    .pb(px(6.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.0))
+                    .children(sections)
+                    .when(notes.sections.is_empty(), |d| {
+                        d.child(div().text_size(px(13.0)).text_color(muted()).child(t!("version.no_notes").into_owned()))
+                    }),
+            )
+            .children(self.update_failed.as_ref().map(|why| {
+                div().px(px(26.0)).pt(px(10.0)).text_size(px(12.0)).text_color(red()).child(t!("version.failed", why = why).into_owned())
+            }))
+            .child(
+                div().px(px(26.0)).py(px(18.0)).flex().items_center().gap(px(12.0)).child(on_github).child(div().flex_1()).child(buttons),
+            )
+            .child(
+                div()
+                    .id("version-close")
+                    .absolute()
+                    .top(px(14.0))
+                    .right(px(14.0))
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_color(muted())
+                    .hover(|s| s.text_color(text()).bg(panel_hi()))
+                    .child("✕")
+                    .on_click(cx.listener(move |s, _, _, cx| close(s, cx))),
+            );
+        deferred(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .bg(rgba(0x0000008c))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(card)
+                .with_animation("version-in", Animation::new(Duration::from_millis(160)).with_easing(ease_in_out), |el, t| el.opacity(t)),
+        )
+        .with_priority(2)
+        .into_any_element()
+    }
+
     /// The settings, over the window: the language, the other machines, the updates. Esc, ✕ or a click outside it
     /// closes it.
     fn settings_window(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1263,7 +1547,37 @@ impl Shell {
                         (s.settings_page, s.machine_remove) = (p, None);
                         cx.notify();
                     }))
-            }));
+            }))
+            // At the bottom: the version that runs, and what it brought.
+            .child(div().flex_1())
+            .child(
+                div()
+                    .px(px(10.0))
+                    .pb(px(4.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(faint())
+                            .child(t!("settings.version", version = env!("CARGO_PKG_VERSION")).into_owned()),
+                    )
+                    .child(
+                        div()
+                            .id("settings-whats-new")
+                            .text_size(px(12.0))
+                            .text_color(if self.notes_loading { faint() } else { blue() })
+                            .when(!self.notes_loading, |d| d.cursor_pointer().hover(|s| s.underline()))
+                            .child(if self.notes_loading { t!("version.loading") } else { t!("version.whats_new_link") }.into_owned())
+                            .on_click(cx.listener(|s, _, window, cx| s.show_whats_new(window, cx))),
+                    )
+                    .children(
+                        self.notes_failed
+                            .as_ref()
+                            .map(|why| div().text_size(px(11.0)).line_height(px(15.0)).text_color(red()).child(why.clone())),
+                    ),
+            );
         let content = match page {
             SettingsPage::Language => {
                 div().child(section(t!("settings.language").into_owned(), t!("settings.language_sub").into_owned())).children(languages)
@@ -1935,6 +2249,7 @@ impl Render for Shell {
             div().flex_1().min_h_0().flex().child(content).children(side)
         };
         let settings = self.settings_open.then(|| self.settings_window(cx));
+        let version = self.version_window.clone().map(|which| self.version_window(&which, cx));
         div()
             .relative()
             .size_full()
@@ -1956,6 +2271,7 @@ impl Render for Shell {
             .child(self.header(wide, window, cx))
             .child(main)
             .children(settings)
+            .children(version)
     }
 }
 
@@ -1979,6 +2295,15 @@ enum SettingsPage {
     Updates,
 }
 
+/// What the window about a version is for.
+#[derive(Clone)]
+enum VersionWindow {
+    /// A newer version is downloaded: its notes are in the update's state.
+    Ready,
+    /// This version ran for the first time: what it brings.
+    WhatsNew(update::Notes),
+}
+
 /// The window's shell, for the menus that open its settings.
 pub struct ShellHandle(pub WeakEntity<Shell>);
 
@@ -1989,6 +2314,13 @@ pub fn open_settings(cx: &mut App) {
     let Some(shell) = cx.try_global::<ShellHandle>().and_then(|h| h.0.upgrade()) else { return };
     let Some(w) = cx.windows().into_iter().next() else { return };
     w.update(cx, |_, window, cx| shell.update(cx, |s, cx| s.open_settings(window, cx))).ok();
+}
+
+/// Checks for updates in the settings' own page (from a menu).
+pub fn check_for_updates(cx: &mut App) {
+    let Some(shell) = cx.try_global::<ShellHandle>().and_then(|h| h.0.upgrade()) else { return };
+    let Some(w) = cx.windows().into_iter().next() else { return };
+    w.update(cx, |_, window, cx| shell.update(cx, |s, cx| s.check_from_menu(window, cx))).ok();
 }
 
 /// A small hover card: a title and a line under it.

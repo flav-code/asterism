@@ -62,7 +62,7 @@
     "update": {
       "downloading": "Downloading v%{version}… %{percent}%",
       "ready": "Update ready · v%{version}",
-      "click_to_restart": "Click to restart and update.",
+      "click_to_restart": "Click to see what it brings and restart.",
       "installs_on_click": "It installs when you click the green arrow."
     },
     "feed": {
@@ -360,7 +360,7 @@
       "up_to_date": "Asterism %{version} is up to date",
       "up_to_date_detail": "It also checks on its own, every 6 hours.",
       "ready": "Asterism %{version} is ready",
-      "ready_detail": "Click the green arrow at the top right of the window to restart on it.",
+      "ready_detail": "Click the green arrow at the top right of the window to see what it brings and restart on it.",
       "scoop": "Installed with Scoop",
       "scoop_detail": "Scoop updates it: run scoop update asterism.",
       "not_installed": "This copy doesn't update itself",
@@ -369,6 +369,20 @@
       "off_detail": "ASTERISM_NO_UPDATES is set.",
       "failed": "Couldn't check for updates"
     }
+  },
+  "version": {
+    "ready": "Asterism %{version} is ready",
+    "whats_new": "What's new in Asterism %{version}",
+    "new": "New",
+    "fixed": "Fixed",
+    "restart": "Restart and update",
+    "later": "Later",
+    "on_github": "See this release on GitHub",
+    "whats_new_link": "What's new",
+    "loading": "Loading…",
+    "notes_failed": "Couldn't load the notes: %{why}",
+    "no_notes": "This release has no notes.",
+    "failed": "The update could not be installed: %{why}"
   },
   "view": {
     "loading": "Reading the machine…",

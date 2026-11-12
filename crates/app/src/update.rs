@@ -32,7 +32,74 @@ pub enum State {
     Ready {
         version: String,
         file: PathBuf,
+        /// What this version brings, as its release says it.
+        notes: Notes,
     },
+}
+
+/// What a release brings: when it came out and the lines under its "What's new".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Notes {
+    pub version: String,
+    /// The day it was published, "YYYY-MM-DD"; empty when the release does not say.
+    pub date: String,
+    pub sections: Vec<Section>,
+}
+
+/// One part of a release's notes ("New", "Fixed") and its lines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section {
+    pub title: String,
+    pub items: Vec<String>,
+}
+
+/// The "What's new" part of a release's text: under that `##` title, a `###` line opens a section and each `- ` line
+/// is one of its items. A release without it (the ones before 0.1.10) has no notes.
+pub fn parse_notes(body: &str) -> Vec<Section> {
+    let mut sections: Vec<Section> = Vec::new();
+    let mut inside = false;
+    for line in body.lines().map(str::trim) {
+        if let Some(title) = line.strip_prefix("## ") {
+            inside = title.eq_ignore_ascii_case("What's new");
+        } else if !inside {
+            continue;
+        } else if let Some(title) = line.strip_prefix("### ") {
+            sections.push(Section { title: title.to_string(), items: Vec::new() });
+        } else if let (Some(item), Some(section)) = (line.strip_prefix("- "), sections.last_mut()) {
+            section.items.push(item.replace('`', ""));
+        }
+    }
+    sections.retain(|s| !s.items.is_empty());
+    sections
+}
+
+fn notes_from(release: &serde_json::Value) -> Notes {
+    Notes {
+        version: release["tag_name"].as_str().unwrap_or_default().trim_start_matches('v').to_string(),
+        date: release["published_at"].as_str().and_then(|d| d.get(..10)).unwrap_or_default().to_string(),
+        sections: parse_notes(release["body"].as_str().unwrap_or_default()),
+    }
+}
+
+/// One release as GitHub describes it.
+fn release_json(url: &str) -> Result<serde_json::Value, String> {
+    agent()
+        .get(url)
+        .header("User-Agent", &format!("Asterism/{}", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_json()
+        .map_err(|e| e.to_string())
+}
+
+/// The notes of the release of `version`, asked from GitHub: it blocks, so call it off the window's thread.
+/// ASTERISM_NOTES_URL (a test release) is asked instead when set.
+pub fn notes_of(version: &str) -> Result<Notes, String> {
+    let url =
+        std::env::var("ASTERISM_NOTES_URL").unwrap_or_else(|_| format!("https://api.github.com/repos/{REPO}/releases/tags/v{version}"));
+    release_json(&url).map(|release| notes_from(&release))
 }
 
 /// What this machine downloads: the end of the release asset's name.
@@ -147,15 +214,7 @@ fn check(tx: &watch::Sender<State>) -> Result<(), String> {
     let Some(suffix) = asset_suffix() else { return Ok(()) };
     let api = std::env::var("ASTERISM_UPDATE_URL").unwrap_or_else(|_| format!("https://api.github.com/repos/{REPO}/releases/latest"));
     let ua = format!("Asterism/{}", env!("CARGO_PKG_VERSION"));
-    let release: serde_json::Value = agent()
-        .get(&api)
-        .header("User-Agent", &ua)
-        .header("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| e.to_string())?
-        .body_mut()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let release = release_json(&api)?;
     let tag = release["tag_name"].as_str().unwrap_or_default();
     if !newer(tag, env!("CARGO_PKG_VERSION")) {
         return Ok(());
@@ -197,7 +256,7 @@ fn check(tx: &watch::Sender<State>) -> Result<(), String> {
         tx.send_replace(State::Idle);
         return Err(format!("{name}: the download doesn't match the release"));
     }
-    tx.send_replace(State::Ready { version, file });
+    tx.send_replace(State::Ready { version, file, notes: notes_from(&release) });
     Ok(())
 }
 
@@ -241,7 +300,7 @@ pub fn apply(file: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::newer;
+    use super::{Section, newer, parse_notes};
 
     #[test]
     fn compares_versions() {
@@ -249,5 +308,16 @@ mod tests {
         assert!(newer("v0.10.0", "0.9.7"));
         assert!(!newer("v0.1.0", "0.1.0"));
         assert!(!newer("v0.1.0", "0.2.0"));
+    }
+
+    #[test]
+    fn reads_what_is_new_from_a_release() {
+        let body = "## What's new\n\n### New\n- A search over `each` column\n- Notes after an update\n\n### Fixed\n\n### Other\n- One\n\n## Install\n- not a note\n";
+        let section = |title: &str, items: &[&str]| Section { title: title.into(), items: items.iter().map(|i| i.to_string()).collect() };
+        assert_eq!(
+            parse_notes(body),
+            [section("New", &["A search over each column", "Notes after an update"]), section("Other", &["One"])]
+        );
+        assert_eq!(parse_notes("## Install\n- nothing new is said"), []);
     }
 }

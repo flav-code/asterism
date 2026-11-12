@@ -63,8 +63,9 @@ jobs:
           $p = Start-Process target\release\asterism.exe -PassThru -RedirectStandardError "$PWD\asterism-err.txt"
           Start-Sleep 20
           # The window's own menu (its icon in the title bar) has the app's items, and the taskbar icon's menu
-          # (a second asterism.exe --dock-action 0) hands its command to the open window, which says this copy
-          # doesn't update itself: the dialog is in the screenshot.
+          # (a second asterism.exe --dock-action) hands its command to the open window. Checking for updates
+          # answers in the app's own settings, so the hand-over is checked with About, which still opens a
+          # system dialog: it is in the screenshot.
           Add-Type @'
           using System; using System.Runtime.InteropServices; using System.Text;
           public static class W {
@@ -102,14 +103,14 @@ jobs:
             "window menu item ${id}: $text"
             if ($text.Length -eq 0) { throw "window menu item $id missing" }
           }
-          $second = Start-Process target\release\asterism.exe -ArgumentList "--dock-action", "0" -PassThru
+          $second = Start-Process target\release\asterism.exe -ArgumentList "--dock-action", "1" -PassThru
           if (-not $second.WaitForExit(15000)) { throw "the second asterism.exe kept running instead of handing over" }
           "second asterism.exe exited with $($second.ExitCode)"
           Start-Sleep 4
           $windows = [W]::List([uint32]$p.Id)
           "Asterism's windows:"; $windows
           if ($p.HasExited) { Get-Content asterism-err.txt -ErrorAction SilentlyContinue; throw "Asterism quit with code $($p.ExitCode)" }
-          if ($windows -notmatch '#32770') { Get-Content asterism-err.txt -ErrorAction SilentlyContinue; throw "no dialog after Check for updates" }
+          if ($windows -notmatch '#32770') { Get-Content asterism-err.txt -ErrorAction SilentlyContinue; throw "no dialog after About" }
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -177,6 +178,11 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
+      # The whole history, for the notes: the commits since the release before.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: macos-*
@@ -196,6 +202,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v=${{ needs.check.outputs.version }}
+          TAG=$GITHUB_REF_NAME
+          # What's new: the feat and fix commits since the release before, as the app reads them after an update
+          # ("## What's new", then "### New" and "### Fixed" with one "- " line each).
+          prev=$(git -C src describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          lines() { git -C src log --reverse --format=%s "${prev:+$prev..}$TAG" | sed -nE "s/^$1(\([^)]*\))?!?: (.+)$/- \u\2/p"; }
+          new=$(lines feat); fixed=$(lines fix)
+          {
+            echo "## What's new"; echo
+            if [ -n "$new" ]; then printf '### New\n%s\n\n' "$new"; fi
+            if [ -n "$fixed" ]; then printf '### Fixed\n%s\n\n' "$fixed"; fi
+          } > whatsnew.md
+          cat whatsnew.md
           cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
           cat > ../notes.md <<EOF
           ## Install
@@ -216,12 +234,12 @@ jobs:
           reaches them with \`ssh\` and copies its agent there itself: \`asterism-agent-$v-linux-*\` (Linux, x64 and arm64).
 
           **Updates:** Asterism checks for new versions on its own. When one is ready, a green arrow shows at the top
-          right of the window: click it to restart on the new version.
+          right of the window: click it to see what the new version brings and restart on it.
 
           Checksums are in \`SHA256SUMS.txt\`.
           EOF
           sed -i 's/^          //' ../notes.md
-          TAG=$GITHUB_REF_NAME
+          cat ../whatsnew.md ../notes.md > ../body.md && mv ../body.md ../notes.md
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" * --clobber --repo "$GITHUB_REPOSITORY"
           else
