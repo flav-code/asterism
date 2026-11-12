@@ -38,7 +38,8 @@ Macs, an installer for Windows. Asterism updates itself: when a newer version is
 right; click it and say yes to restart on the new version. The first launch of a new version shows what changed,
 and Settings keeps it under What's new. Installed with Scoop, it leaves updates to `scoop update`. To check
 right away: the arrow next to the version at the bottom of Settings, or Check for Updates… in the Asterism menu of the menu bar or the Dock icon's menu on macOS, and on Windows
-in the window's own menu (its icon in the title bar, or Alt+Space) or the taskbar icon's menu.
+in the window's own menu (its icon in the title bar, or Alt+Space) or the taskbar icon's menu. A check that finds a
+newer version asks at once whether to restart on it.
 
 The builds are not signed yet. On macOS, the first time you open it, macOS blocks it: go to System Settings → Privacy
 & Security and click Open Anyway. On Windows, SmartScreen asks once: More info → Run anyway.

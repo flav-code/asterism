@@ -1194,17 +1194,24 @@ impl Shell {
         self.machine.update(cx, |m, cx| m.relabel(window, cx));
     }
 
-    /// Checks for a newer version now; the answer shows under the button.
-    fn check_updates(&mut self, cx: &mut Context<Self>) {
+    /// Checks for a newer version now. One that is ready takes the settings' place with its window, to restart on it
+    /// at once; any other answer shows under the button.
+    fn check_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.update_checking {
             return;
         }
         (self.update_checking, self.update_answer) = (true, None);
         cx.notify();
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let found = cx.background_executor().spawn(async { update::check_now() }).await;
-            this.update(cx, |s, cx| {
-                (s.update_checking, s.update_answer) = (false, Some(crate::menus::checked(found)));
+            this.update_in(cx, |s, window, cx| {
+                s.update_checking = false;
+                if matches!(found, update::Checked::Ready(_)) {
+                    (s.settings_open, s.version_window, s.update_failed) = (false, Some(VersionWindow::Ready), None);
+                    s.version_focus.focus(window, cx);
+                } else {
+                    s.update_answer = Some(crate::menus::checked(found));
+                }
                 cx.notify();
             })
             .ok();
@@ -1421,10 +1428,10 @@ impl Shell {
     }
 
     /// "Check for Updates…" of the system's menus: the settings open and check, so the answer is in the app's own
-    /// window, under the version at the bottom of their sidebar.
+    /// window, under the version at the bottom of their sidebar, or in the window of the version that is ready.
     fn check_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(window, cx);
-        self.check_updates(cx);
+        self.check_updates(window, cx);
     }
 
     /// The window about a version, over the app. For a version to install it only asks: not now, or yes and restart.
@@ -1716,7 +1723,7 @@ impl Shell {
             .when(!self.update_checking, |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
             .child(crate::icons::line(IconName::RefreshCw, if self.update_checking { faint() } else { blue() }, 13.0))
             .tooltip(|_, cx| cx.new(|_| Tip { title: t!("settings.check").into_owned(), detail: String::new() }).into())
-            .on_click(cx.listener(|s, _, _, cx| s.check_updates(cx)));
+            .on_click(cx.listener(|s, _, window, cx| s.check_updates(window, cx)));
         let answer = if self.update_checking {
             Some(div().text_size(px(11.0)).text_color(faint()).child(t!("settings.checking").into_owned()))
         } else {
