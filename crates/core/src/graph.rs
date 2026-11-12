@@ -840,21 +840,25 @@ pub fn follow(home: &Path, cache: Option<&Path>, mut send: impl FnMut(Arc<Graph>
     // What the file on disk holds, as bytes of transcripts read, and when it was last written.
     let (mut kept, mut kept_at) = (viz.transcripts.read_bytes(), Instant::now() - SAVE_EVERY);
     let mut sys = System::new().expect("sysinfo supports this OS");
-    let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
+    // The usage last sent, and what it was made from: the replies counted and how far the reading was.
+    let (mut usage, mut usage_of) = (Arc::new(UsageView::default()), None);
     loop {
         if READ_AGAIN.swap(false, Ordering::Relaxed) {
             if let Some(path) = cache {
                 fs::remove_file(path).ok();
             }
-            (viz, kept, kept_at, usage_version) = (Visualizer::default(), 0, Instant::now() - SAVE_EVERY, u64::MAX);
+            (viz, kept, kept_at, usage_of) = (Visualizer::default(), 0, Instant::now() - SAVE_EVERY, None);
         }
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
         let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
         let desktop = store.refresh(home);
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         let graph = viz.build(home, &desktop, &live, now);
-        if viz.usage.version != usage_version {
-            (usage, usage_version) = (Arc::new(viz.usage_view()), viz.usage.version);
+        // The usage also says how far the reading is, so it is made again when that moves and not only when a reply
+        // is counted: a reading can end on transcripts that count none, and would never be said to be over.
+        let made_of = Some((viz.usage.version, viz.scanned, viz.ready));
+        if usage_of != made_of {
+            (usage, usage_of) = (Arc::new(viz.usage_view()), made_of);
         }
         if !send(Arc::new(graph), usage.clone()) {
             break;
@@ -1016,6 +1020,32 @@ mod tests {
         let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, ["cli:s8", "local_abc"]);
+        fs::remove_dir_all(&home).ok();
+    }
+
+    /// A reading whose last transcript counts no reply is still said to be over: the usage sent says how far the
+    /// reading is, whether or not a reply was counted since the one before.
+    #[test]
+    fn a_reading_that_ends_on_a_transcript_without_replies_ends() {
+        let home = std::env::temp_dir().join(format!("asterism-ends-test-{}", std::process::id()));
+        let dir = home.join(".claude/projects/-srv-api");
+        fs::create_dir_all(&dir).unwrap();
+        let reply = serde_json::json!({ "type": "assistant", "timestamp": "2026-11-08T10:01:00Z",
+            "message": { "id": "msg_1", "model": "claude-opus-5-5", "usage": { "output_tokens": 100 }, "content": [{ "type": "text", "text": "Done" }] } });
+        fs::write(dir.join("new.jsonl"), reply.to_string() + "\n").unwrap();
+        // Older, read after it, and too big for the first build: its end comes in a build that counts nothing.
+        let old = dir.join("old.jsonl");
+        fs::write(&old, "{\"type\":\"system\"}\n".repeat((FIRST_READ as usize / 18) + 50_000)).unwrap();
+        let earlier = SystemTime::now() - Duration::from_secs(3600);
+        fs::File::options().write(true).open(&old).unwrap().set_modified(earlier).unwrap();
+
+        let (mut sent, mut last) = (0, Arc::new(UsageView::default()));
+        follow(&home, None, |_, usage| {
+            (sent, last) = (sent + 1, usage);
+            !last.ready && sent < 40
+        });
+        assert!(last.ready, "after {sent} sends the reading is at {} of {} transcripts", last.scanned, last.total);
+        assert_eq!((last.scanned, last.total, last.read_bytes), (2, 2, last.total_bytes));
         fs::remove_dir_all(&home).ok();
     }
 

@@ -2447,12 +2447,20 @@ impl Render for Shell {
                 crate::glide::again(window, cx);
             }
         }
-        // The loader's bar slides to the share of history read; once all is read it fades out.
+        // The loader's bar slides to the share of history read; once all is read it fades out. It comes back each time
+        // something is read again: another machine that connects after this one was read (its agent reads everything
+        // again after an update), or a history that was reset.
         if let Some(u) = self.usage.clone() {
             let now = Instant::now();
             let dt = (now - self.load_last).as_secs_f32();
             self.load_last = now;
             let target = if u.total_bytes == 0 { 0.0 } else { u.read_bytes as f32 / u.total_bytes as f32 };
+            if !u.ready {
+                if self.load_alpha <= 0.01 {
+                    self.load_fill = target; // back from nothing: where the reading is, not the 100% it left at
+                }
+                self.load_alpha = 1.0;
+            }
             self.load_fill = crate::glide::ease(self.load_fill, if u.ready { 1.0 } else { target }, dt * 0.5);
             if u.ready && (1.0 - self.load_fill) < 0.01 {
                 self.load_alpha = crate::glide::ease(self.load_alpha, 0.0, dt * 0.25);
