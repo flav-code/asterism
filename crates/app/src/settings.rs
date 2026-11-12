@@ -30,11 +30,32 @@ pub struct Settings {
     pub seen_version: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Machine {
     pub name: String,
     /// What follows `ssh` in a terminal: `me@host`, or a Host from ~/.ssh/config.
     pub target: String,
+    /// Its SSH port, when it is neither 22 nor in ~/.ssh/config.
+    pub port: Option<u16>,
+    /// The private key's file as typed (`~/.ssh/id_ed25519`), when neither ~/.ssh/config nor the SSH agent gives it.
+    pub key: Option<String>,
+}
+
+impl Machine {
+    /// A machine as the settings file keeps it.
+    fn written(&self) -> Value {
+        json!({ "name": self.name, "target": self.target, "port": self.port, "key": self.key })
+    }
+
+    /// A machine read back from the settings file; one written before ports and keys has neither.
+    fn read(v: &Value) -> Option<Machine> {
+        Some(Machine {
+            name: v.get("name")?.as_str()?.into(),
+            target: v.get("target")?.as_str()?.into(),
+            port: v.get("port").and_then(Value::as_u64).and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0),
+            key: v.get("key").and_then(Value::as_str).filter(|k| !k.trim().is_empty()).map(str::to_string),
+        })
+    }
 }
 
 impl Global for Settings {}
@@ -98,12 +119,20 @@ impl Settings {
     pub fn load() -> Self {
         let d = Settings::default();
         if cfg!(feature = "snapshot") {
-            // Snapshot builds can be given machines: MDB_MACHINES="name=target;…".
+            // Snapshot builds can be given machines: MDB_MACHINES="name=target[,port[,key]];…".
             let machines = std::env::var("MDB_MACHINES").unwrap_or_default();
             let machines = machines
                 .split(';')
                 .filter_map(|m| m.split_once('='))
-                .map(|(name, target)| Machine { name: name.into(), target: target.into() })
+                .map(|(name, target)| {
+                    let mut given = target.splitn(3, ',');
+                    Machine {
+                        name: name.into(),
+                        target: given.next().unwrap_or_default().into(),
+                        port: given.next().and_then(|p| p.parse().ok()),
+                        key: given.next().map(str::to_string),
+                    }
+                })
                 .collect();
             return Settings { machines, ..d };
         }
@@ -135,7 +164,7 @@ impl Settings {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|m| Some(Machine { name: m.get("name")?.as_str()?.into(), target: m.get("target")?.as_str()?.into() }))
+                .filter_map(Machine::read)
                 .filter(|m| crate::machines::check(&m.name, &m.target, &[]).is_ok())
                 .collect(),
             // Settings without it were written by a version from before the notes: an update, not a first install.
@@ -151,7 +180,7 @@ impl Settings {
             "tab": self.tab, "range": self.range, "project": self.project, "archived": self.archived, "agents": self.agents,
             "map_titles": self.titles, "map_legend": self.legend, "panel": self.panel, "feed": self.feed, "feed_h": self.feed_h,
             "usage_range": self.usage_range, "usage_metric": self.usage_metric, "language": self.language,
-            "machines": self.machines.iter().map(|m| json!({ "name": m.name, "target": m.target })).collect::<Vec<_>>(),
+            "machines": self.machines.iter().map(Machine::written).collect::<Vec<_>>(),
             "seen_version": self.seen_version,
         });
         let dir = data_dir();
@@ -208,4 +237,26 @@ pub fn apply_language(cx: &mut App) {
 pub fn set_machines(cx: &mut App, machines: Vec<Machine>) {
     change(cx, |s| s.machines = machines);
     crate::machines::sync(&cx.global::<Settings>().machines, &i18n::current());
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: it would bring in GPUI's own `test` attribute.
+    use super::Machine;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_machine_comes_back_as_it_was_written() {
+        let full = Machine { name: "vps".into(), target: "me@vps".into(), port: Some(2222), key: Some("~/.ssh/id_ed25519".into()) };
+        let plain = Machine { name: "nas".into(), target: "nas-alias".into(), ..Machine::default() };
+        for m in [full, plain.clone()] {
+            // Through text, as the file does.
+            let read: Value = serde_json::from_str(&m.written().to_string()).unwrap();
+            assert_eq!(Machine::read(&read), Some(m));
+        }
+        // Written by a version from before ports and keys.
+        assert_eq!(Machine::read(&json!({ "name": "nas", "target": "nas-alias" })), Some(plain));
+        assert_eq!(Machine::read(&json!({ "name": "nas" })), None);
+        assert_eq!(Machine::read(&json!({ "name": "nas", "target": "nas-alias", "port": 70000 })).unwrap().port, None);
+    }
 }

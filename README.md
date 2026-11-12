@@ -53,8 +53,9 @@ another one, and the choice is kept. The texts live in `locales/`, one JSON file
 ## Other machines
 
 Sessions on your VMs, VPSs and dedicated servers show on the map too, next to this computer's. Add one in Settings >
-Other machines: a name, and what you type after `ssh` to reach it (`me@host`, or a `Host` from `~/.ssh/config`). A dot
-on the gear says when one is on its way (amber) or failed (red).
+Other machines: a name, and what you type after `ssh` to reach it (`me@host`, or a `Host` from `~/.ssh/config`). Its
+SSH port and the path of a private key can be given too; left empty, your SSH configuration and agent decide. A dot on
+the gear says when one is on its way (amber) or failed (red).
 
 - Asterism runs the system's `ssh`, so your keys, `~/.ssh/config` and SSH agent apply. It never asks for a password:
   the machine must accept your key, and its host key must be known (connect once from a terminal to accept it).

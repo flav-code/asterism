@@ -190,7 +190,15 @@
   "machines": {
     "intro": "Sessions on other machines (VMs, servers) show here too. Asterism connects with ssh and your keys, then copies a small agent to ~/.cache/asterism there.",
     "name": "Name",
-    "target": "user@host or ssh alias",
+    "target": "user@hostname",
+    "name_example": "Dev server",
+    "name_hint": "A name for this machine: its sessions carry it.",
+    "host": "SSH host",
+    "host_hint": "user@myserver.com, or a Host from ~/.ssh/config.",
+    "port": "SSH port",
+    "port_hint": "Leave empty for the default (22) or what your SSH configuration says.",
+    "key": "SSH key (optional)",
+    "key_hint": "Path to a private key. Leave empty to use your SSH configuration or agent.",
     "add": "Add",
     "connecting": "Connecting…",
     "installing": "Copying the agent…",
@@ -206,7 +214,9 @@
       "name": "Give it a name",
       "taken": "Another machine has this name",
       "target": "Enter what you type after ssh",
-      "not_target": "Not an SSH target: user@host, or a Host from ~/.ssh/config"
+      "not_target": "Not an SSH target: user@host, or a Host from ~/.ssh/config",
+      "port": "A port is a number from 1 to 65535",
+      "key": "There is no key file at this path"
     },
     "error": {
       "closed": "The connection closed",

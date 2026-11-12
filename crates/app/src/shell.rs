@@ -181,6 +181,8 @@ pub struct Shell {
     /// The machines menu's form, and the machine whose removal waits for a yes.
     machine_name: Entity<InputState>,
     machine_target: Entity<InputState>,
+    machine_port: Entity<InputState>,
+    machine_key: Entity<InputState>,
     machine_remove: Option<String>,
     /// The menu a press outside it just closed: when that press was on its own button, the click must not open it
     /// again.
@@ -211,8 +213,11 @@ impl Shell {
         let dash = cx.new(DashView::new);
         let panel = cx.new(Panel::new);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("shell.search").to_string()));
-        let machine_name = cx.new(|cx| InputState::new(window, cx).placeholder(t!("machines.name").to_string()));
+        let machine_name = cx.new(|cx| InputState::new(window, cx).placeholder(t!("machines.name_example").to_string()));
         let machine_target = cx.new(|cx| InputState::new(window, cx).placeholder(t!("machines.target").to_string()));
+        // What ssh uses when these stay empty: the same in every language.
+        let machine_port = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
+        let machine_key = cx.new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_ed25519"));
         let subs = vec![
             // One selection for the map, the timeline and the panel.
             cx.subscribe(&map, |s, map, e: &MapEvent, cx| match e {
@@ -240,6 +245,8 @@ impl Shell {
             // The form's Add button follows what is typed; Enter adds.
             cx.subscribe_in(&machine_name, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
             cx.subscribe_in(&machine_target, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
+            cx.subscribe_in(&machine_port, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
+            cx.subscribe_in(&machine_key, window, |s, _, e: &InputEvent, window, cx| s.machine_form(e, window, cx)),
         ];
         let updates_task = cx.spawn(async move |this, cx| {
             while feed.changed().await.is_ok() {
@@ -328,6 +335,8 @@ impl Shell {
             storage_confirm: None,
             machine_name,
             machine_target,
+            machine_port,
+            machine_key,
             machine_remove: None,
             menu_closed: None,
             menu_opens: 0,
@@ -915,10 +924,16 @@ impl Shell {
         !self.menu_closed.is_some_and(|(m, at)| m == menu && at.elapsed() < Duration::from_millis(400))
     }
 
-    /// Why the machine typed in the form can't be added yet (None: it can).
-    fn machine_invalid(&self, cx: &App) -> Option<String> {
-        let (name, target) = (self.machine_name.read(cx).value(), self.machine_target.read(cx).value());
-        crate::machines::check(&name, &target, &cx.global::<Settings>().machines).err()
+    /// The machine typed in the form, or why it can't be added yet.
+    fn machine_typed(&self, cx: &App) -> Result<settings::Machine, String> {
+        let said = |input: &Entity<InputState>| input.read(cx).value();
+        crate::machines::typed(
+            &said(&self.machine_name),
+            &said(&self.machine_target),
+            &said(&self.machine_port),
+            &said(&self.machine_key),
+            &cx.global::<Settings>().machines,
+        )
     }
 
     fn machine_form(&mut self, e: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -930,15 +945,11 @@ impl Shell {
     }
 
     fn add_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.machine_invalid(cx).is_some() {
-            return;
-        }
-        let name = self.machine_name.read(cx).value().trim().to_string();
-        let target = self.machine_target.read(cx).value().trim().to_string();
+        let Ok(machine) = self.machine_typed(cx) else { return };
         let mut list = cx.global::<Settings>().machines.clone();
-        list.push(settings::Machine { name, target });
+        list.push(machine);
         settings::set_machines(cx, list);
-        for input in [&self.machine_name, &self.machine_target] {
+        for input in [&self.machine_name, &self.machine_target, &self.machine_port, &self.machine_key] {
             input.update(cx, |i, cx| i.set_value("", window, cx));
         }
         cx.notify();
@@ -1031,7 +1042,7 @@ impl Shell {
                                 })),
                         ),
                 )
-                .child(div().pl(px(16.0)).font_family(MONO).text_size(px(11.0)).text_color(faint()).child(m.target.clone()))
+                .child(div().pl(px(16.0)).font_family(MONO).text_size(px(11.0)).text_color(faint()).child(crate::machines::as_typed(m)))
                 .child(
                     div()
                         .pl(px(16.0))
@@ -1078,8 +1089,19 @@ impl Shell {
                     )
                 })
         });
-        let invalid = self.machine_invalid(cx);
-        let typed = !self.machine_name.read(cx).value().is_empty() || !self.machine_target.read(cx).value().is_empty();
+        let invalid = self.machine_typed(cx).err();
+        let fields = [&self.machine_name, &self.machine_target, &self.machine_port, &self.machine_key];
+        let typed = fields.iter().any(|input| !input.read(cx).value().is_empty());
+        // One field of the form: what it is, where it is typed, and what to type.
+        let field = |label: &str, input: &Entity<InputState>, hint: &str| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .child(div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(text()).child(t!(label).into_owned()))
+                .child(Input::new(input))
+                .child(div().text_size(px(11.5)).line_height(px(15.0)).text_color(muted()).child(t!(hint).into_owned()))
+        };
         let add = div()
             .id("machine-add")
             .flex_none()
@@ -1107,11 +1129,20 @@ impl Shell {
                 .border_color(line())
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
-                .child(Input::new(&self.machine_name))
-                .child(div().flex().gap(px(6.0)).child(div().flex_1().child(Input::new(&self.machine_target))).child(add))
-                // Typed but not addable: why, under the form, until it is fixed.
-                .when_some(invalid.filter(|_| typed), |d, why| d.child(div().text_size(px(11.0)).text_color(faint()).child(why))),
+                .gap(px(12.0))
+                .child(field("machines.name", &self.machine_name, "machines.name_hint"))
+                .child(field("machines.host", &self.machine_target, "machines.host_hint"))
+                .child(field("machines.port", &self.machine_port, "machines.port_hint"))
+                .child(field("machines.key", &self.machine_key, "machines.key_hint"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        // Typed but not addable: why, next to the button, until it is fixed.
+                        .child(div().flex_1().text_size(px(11.5)).text_color(amber()).children(invalid.filter(|_| typed)))
+                        .child(add),
+                ),
         )
     }
 
@@ -1156,7 +1187,7 @@ impl Shell {
     /// The inputs keep the placeholders they were made with: they get this language's.
     fn relabel_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
         for (input, key) in
-            [(&self.search, "shell.search"), (&self.machine_name, "machines.name"), (&self.machine_target, "machines.target")]
+            [(&self.search, "shell.search"), (&self.machine_name, "machines.name_example"), (&self.machine_target, "machines.target")]
         {
             input.update(cx, |i, cx| i.set_placeholder(t!(key).to_string(), window, cx));
         }
@@ -2196,6 +2227,13 @@ impl Shell {
             return;
         }
         self.snapshot_taken = true;
+        // MDB_MACHINE_FORM="name|host|port|key": what is typed in the form that adds a machine.
+        if let Ok(form) = std::env::var("MDB_MACHINE_FORM") {
+            let inputs = [&self.machine_name, &self.machine_target, &self.machine_port, &self.machine_key];
+            for (input, typed) in inputs.into_iter().zip(form.split('|')) {
+                input.update(cx, |i, cx| i.set_value(typed.to_string(), window, cx));
+            }
+        }
         // MDB_SELECT: select the first session whose title has this text.
         if let (Ok(want), Some(g)) = (std::env::var("MDB_SELECT"), self.graph.clone())
             && let Some(n) =

@@ -9,7 +9,7 @@ use asterism_core::remote::{Frame, Mirror};
 use rust_i18n::t;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -69,6 +69,40 @@ pub fn check(name: &str, target: &str, taken: &[Machine]) -> Result<(), String> 
         return Err(t!("machines.check.not_target").into_owned());
     }
     Ok(())
+}
+
+/// The machine typed in the form, or why it can't be added as given: [`check`], then a port that is one and a key
+/// file that is there.
+pub fn typed(name: &str, target: &str, port: &str, key: &str, taken: &[Machine]) -> Result<Machine, String> {
+    check(name, target, taken)?;
+    let port = match port.trim() {
+        "" => None,
+        p => Some(p.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| t!("machines.check.port").into_owned())?),
+    };
+    let key = Some(key.trim().to_string()).filter(|k| !k.is_empty());
+    // ssh only warns about a key it can't read, then fails with "Permission denied": say it here instead.
+    if key.as_deref().is_some_and(|k| !key_file(k).is_file()) {
+        return Err(t!("machines.check.key").into_owned());
+    }
+    Ok(Machine { name: name.trim().into(), target: target.trim().into(), port, key })
+}
+
+/// A key's file from how it was typed: `~/` is this user's home, as in a terminal.
+fn key_file(key: &str) -> PathBuf {
+    #[allow(deprecated)]
+    let home = std::env::home_dir().unwrap_or_default();
+    match key.strip_prefix("~/").or_else(|| key.strip_prefix("~\\")) {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(key),
+    }
+}
+
+/// What reaches this machine when typed after `ssh` (or `ssh-copy-id`) in a terminal: its port and key, when it
+/// has them, then its target.
+pub fn as_typed(m: &Machine) -> String {
+    let port = m.port.map(|p| format!("-p {p} ")).unwrap_or_default();
+    let key = m.key.as_ref().map(|k| format!("-i {k} ")).unwrap_or_default();
+    format!("{port}{key}{}", m.target)
 }
 
 /// Starts a connection for each machine of the list and stops those no longer in it (or changed).
@@ -160,7 +194,7 @@ fn follow(m: &Machine, lang: &str, stop: &AtomicBool, ssh: &Mutex<Option<Child>>
             Ok(None) => None,
             Ok(Some(Platform { system, processor })) => {
                 set(&m.name, |r| r.status = Status::Installing);
-                match install(&m.target, &system, &processor) {
+                match install(m, &system, &processor) {
                     Ok(()) => continue,
                     Err(e) => Some(e),
                 }
@@ -183,11 +217,17 @@ fn follow(m: &Machine, lang: &str, stop: &AtomicBool, ssh: &Mutex<Option<Child>>
     }
 }
 
-/// `ssh` to `target`, never asking anything: a password or an unknown host key fails with what ssh says.
-fn ssh(target: &str) -> Command {
+/// `ssh` to this machine, never asking anything: a password or an unknown host key fails with what ssh says.
+fn ssh(m: &Machine) -> Command {
     let mut c = Command::new("ssh");
     c.args(["-T", "-C", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]);
-    c.args(["--", target]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(port) = m.port {
+        c.args(["-p", &port.to_string()]);
+    }
+    if let Some(key) = &m.key {
+        c.arg("-i").arg(key_file(key));
+    }
+    c.args(["--", &m.target]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -219,7 +259,7 @@ struct Platform {
 
 /// One connection, until it ends. Ok(Some(platform)) when the agent must be installed first.
 fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child>>) -> Result<Option<Platform>, String> {
-    let mut child = ssh(&m.target)
+    let mut child = ssh(m)
         .arg(remote_command(lang))
         .spawn()
         .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { t!("machines.error.no_ssh").into_owned() } else { e.to_string() })?;
@@ -261,11 +301,12 @@ fn session(m: &Machine, lang: &str, stop: &AtomicBool, slot: &Mutex<Option<Child
     }
     errors.join().ok();
     let said = locked(&said).clone();
-    if install.is_some() || stop.load(Ordering::Relaxed) || said.is_empty() { Ok(install) } else { Err(explain(&said, &m.target)) }
+    if install.is_some() || stop.load(Ordering::Relaxed) || said.is_empty() { Ok(install) } else { Err(explain(&said, m)) }
 }
 
 /// What ssh said, with what to do about it for the usual cases.
-fn explain(said: &str, target: &str) -> String {
+fn explain(said: &str, m: &Machine) -> String {
+    let target = as_typed(m);
     let hint = if said.contains("Host key verification failed") {
         t!("machines.hint.host_key", target = target)
     } else if said.contains("Permission denied") {
@@ -278,7 +319,7 @@ fn explain(said: &str, target: &str) -> String {
 
 /// Copies the agent for this system and processor to the machine, over SSH, into ~/.cache/asterism (where earlier
 /// versions of it go).
-fn install(target: &str, os: &str, arch: &str) -> Result<(), String> {
+fn install(m: &Machine, os: &str, arch: &str) -> Result<(), String> {
     if os != "Linux" {
         return Err(t!("machines.error.os", os = os).into_owned());
     }
@@ -292,14 +333,14 @@ fn install(target: &str, os: &str, arch: &str) -> Result<(), String> {
         "sh -c 'mkdir -p \"$HOME/.cache/asterism\" && cd \"$HOME/.cache/asterism\" && cat > agent.part && chmod 755 agent.part \
          && mv -f agent.part agent-{VERSION} && for f in agent-*; do [ \"$f\" = agent-{VERSION} ] || rm -f \"$f\"; done'"
     );
-    let mut child = ssh(target).arg(script).spawn().map_err(|e| e.to_string())?;
+    let mut child = ssh(m).arg(script).spawn().map_err(|e| e.to_string())?;
     let mut stdin = child.stdin.take().expect("piped");
     let wrote = stdin.write_all(&agent);
     drop(stdin);
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if wrote.is_err() || !out.status.success() {
         let said = String::from_utf8_lossy(&out.stderr).lines().rfind(|l| !l.trim().is_empty()).unwrap_or_default().trim().to_string();
-        return Err(t!("machines.error.install", why = explain(&said, target)).into_owned());
+        return Err(t!("machines.error.install", why = explain(&said, m)).into_owned());
     }
     Ok(())
 }
@@ -361,7 +402,7 @@ mod tests {
 
     #[test]
     fn checks_what_is_added() {
-        let taken = [Machine { name: "vps".into(), target: "me@vps".into() }];
+        let taken = [Machine { name: "vps".into(), target: "me@vps".into(), ..Machine::default() }];
         assert!(check("box", "me@box", &taken).is_ok());
         assert!(check("box", "box-alias", &taken).is_ok());
         assert!(check("box", "me@10.0.0.2", &taken).is_ok());
@@ -371,6 +412,35 @@ mod tests {
         assert!(check("box", "-oProxyCommand=touch /tmp/x", &taken).is_err(), "an option, not a host");
         assert!(check("box", "me@box; rm -rf ~", &taken).is_err());
         assert!(check("box", "me@box$(id)", &taken).is_err());
+    }
+
+    #[test]
+    fn a_port_and_a_key_are_checked_and_reach_ssh() {
+        let key = std::env::temp_dir().join(format!("asterism-test-key-{}", std::process::id()));
+        std::fs::write(&key, "").unwrap();
+        let key_text = key.to_string_lossy().into_owned();
+        let m = typed(" box ", " me@box ", " 2222 ", &format!(" {key_text} "), &[]).unwrap();
+        assert_eq!((m.name.as_str(), m.target.as_str(), m.port, m.key.as_deref()), ("box", "me@box", Some(2222), Some(key_text.as_str())));
+        let args: Vec<String> = ssh(&m).get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let host = args.iter().position(|a| a == "--").expect("options end before the target");
+        assert!(args[..host].windows(2).any(|w| w == ["-p", "2222"]), "{args:?}");
+        assert!(args[..host].windows(2).any(|w| w[0] == "-i" && w[1] == key_text), "{args:?}");
+        assert_eq!(args[host + 1], "me@box");
+        assert_eq!(as_typed(&m), format!("-p 2222 -i {key_text} me@box"));
+        std::fs::remove_file(&key).ok();
+
+        // Nothing typed: ssh decides, as before.
+        let plain = typed("box", "me@box", "", " ", &[]).unwrap();
+        assert_eq!((plain.port, plain.key.as_deref()), (None, None));
+        assert!(!ssh(&plain).get_args().any(|a| a == "-p" || a == "-i"));
+        assert_eq!(as_typed(&plain), "me@box");
+
+        for port in ["0", "70000", "ssh", "-1", "22 23"] {
+            assert!(typed("box", "me@box", port, "", &[]).is_err(), "{port} is not a port");
+        }
+        assert!(typed("box", "me@box", "", "/no/such/key", &[]).is_err(), "no file there");
+        assert!(typed("box", "", "22", "", &[]).is_err(), "still needs a target");
+        assert!(key_file("~/.ssh/id_ed25519").ends_with(".ssh/id_ed25519") && !key_file("~/.ssh/id_ed25519").starts_with("~"));
     }
 
     #[test]
