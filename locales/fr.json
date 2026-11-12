@@ -12,11 +12,10 @@
   },
   "settings": {
     "title": "Réglages",
-    "button_sub": "Langue, autres machines, mises à jour",
+    "button_sub": "Langue, autres machines, stockage",
     "language": "Langue",
     "language_sub": "Asterism suit la langue de votre système, sauf si vous en choisissez une.",
     "machines": "Autres machines",
-    "updates": "Mises à jour",
     "version": "Asterism %{version}",
     "check": "Rechercher des mises à jour",
     "checking": "Vérification…"
@@ -349,6 +348,7 @@
   },
   "ui": {
     "gb": "%{n} Go",
+    "kb": "%{n} ko",
     "mb": "%{n} Mo",
     "kb_s": "%{n} ko/s",
     "mb_s": "%{n} Mo/s",
@@ -369,6 +369,34 @@
       "off_detail": "ASTERISM_NO_UPDATES est défini.",
       "failed": "Impossible de vérifier les mises à jour"
     }
+  },
+  "storage": {
+    "title": "Stockage",
+    "sub": "Ce qu'Asterism garde sur cet ordinateur. Rien n'en sort, et les autres machines ajoutées ne sont jamais réinitialisées d'ici.",
+    "open_folder": "Ouvrir le dossier",
+    "cache": "cache",
+    "nothing": "rien de gardé",
+    "history": "Historique",
+    "history_sub": "Ce qui a été lu de vos transcripts, pour qu'un lancement ne lise que le nouveau. C'est un cache : le réinitialiser ne perd rien, l'historique est relu.",
+    "history_detail": "%{transcripts} · %{replies} · %{read} lus",
+    "history_reading": "Lecture en cours : %{read} sur %{total}",
+    "transcripts_n": {
+      "one": "%{n} transcript",
+      "other": "%{n} transcripts"
+    },
+    "layout": "Disposition de la carte",
+    "layout_sub": "L'endroit où vous avez laissé chaque bulle, pour chaque plage. Réinitialisée, la carte se redispose seule.",
+    "agents": "Agents des autres machines",
+    "agents_sub": "Téléchargés pour être copiés sur vos serveurs. Réinitialisés, celui dont une machine a besoin est retéléchargé.",
+    "files_n": {
+      "one": "%{n} fichier",
+      "other": "%{n} fichiers"
+    },
+    "preferences": "Préférences",
+    "preferences_sub": "L'onglet, les plages, les filtres, le panneau, la langue. La langue change tout de suite, le reste au prochain lancement.",
+    "reset": "Réinitialiser",
+    "reset_all": "Tout réinitialiser",
+    "yes": "Oui, réinitialiser"
   },
   "version": {
     "ready": "Asterism %{version} est disponible",

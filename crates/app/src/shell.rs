@@ -175,6 +175,9 @@ pub struct Shell {
     /// "What's new" of the settings: its notes are being asked, or why they could not be had.
     notes_loading: bool,
     notes_failed: Option<String>,
+    /// The storage page: what is on disk, and the reset waiting for its yes.
+    storage: Storage,
+    storage_confirm: Option<Kept>,
     /// The machines menu's form, and the machine whose removal waits for a yes.
     machine_name: Entity<InputState>,
     machine_target: Entity<InputState>,
@@ -321,6 +324,8 @@ impl Shell {
             update_failed: None,
             notes_loading: false,
             notes_failed: None,
+            storage: Storage::default(),
+            storage_confirm: None,
             machine_name,
             machine_target,
             machine_remove: None,
@@ -1176,6 +1181,189 @@ impl Shell {
         .detach();
     }
 
+    /// Resets one kind of what is kept, or all of them. The other machines are never part of it: they are removed one
+    /// by one, on their own page.
+    fn reset_kept(&mut self, what: Kept, window: &mut Window, cx: &mut Context<Self>) {
+        let all = what == Kept::Everything;
+        let dir = settings::data_dir();
+        if all || what == Kept::History {
+            // The thread that reads the history forgets it and reads again. Its file goes now, so that the page shows it
+            // gone; the thread removes it again in case it was writing it.
+            if may_remove_files() {
+                std::fs::remove_file(settings::history_file()).ok();
+            }
+            asterism_core::graph::read_again();
+        }
+        if all || what == Kept::Layout {
+            if may_remove_files() {
+                for file in LAYOUT_FILES {
+                    std::fs::remove_file(dir.join(file)).ok();
+                }
+            }
+            self.map.update(cx, |m, _| m.forget_layout());
+            self.push(cx);
+        }
+        if all || what == Kept::Agents {
+            let files = std::fs::read_dir(dir.join("agents")).into_iter().flatten().flatten().filter(|_| may_remove_files());
+            for file in files {
+                std::fs::remove_file(file.path()).ok();
+            }
+        }
+        if all || what == Kept::Preferences {
+            settings::reset(cx);
+            self.relabel_inputs(window, cx);
+        }
+        (self.storage, self.storage_confirm) = (Storage::measure(), None);
+        cx.notify();
+    }
+
+    /// The storage page of the settings: what Asterism keeps on this computer, how much it takes, and a reset for
+    /// each kind, asked twice.
+    fn storage_section(&self, cx: &mut Context<Self>) -> Div {
+        let button = |id: String, label: String, danger: bool| {
+            div()
+                .id(SharedString::from(id))
+                .flex_none()
+                .px(px(10.0))
+                .h(px(28.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .border_1()
+                .border_color(if danger { rgba(0xf8717159) } else { line() })
+                .text_color(if danger { red() } else { muted() })
+                .hover(|s| s.bg(panel_hi()))
+                .child(label)
+        };
+        // A reset asks once more, in place of its button.
+        let reset = |what: Kept, cx: &mut Context<Self>| {
+            let label = if what == Kept::Everything { t!("storage.reset_all") } else { t!("storage.reset") }.into_owned();
+            if self.storage_confirm == Some(what) {
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(px(6.0))
+                    .child(
+                        button(format!("storage-yes-{what:?}"), t!("storage.yes").into_owned(), true)
+                            .on_click(cx.listener(move |s, _, window, cx| s.reset_kept(what, window, cx))),
+                    )
+                    .child(button(format!("storage-no-{what:?}"), t!("machines.cancel").into_owned(), false).on_click(cx.listener(
+                        |s, _, _, cx| {
+                            s.storage_confirm = None;
+                            cx.notify();
+                        },
+                    )))
+            } else {
+                div().flex().flex_none().child(button(format!("storage-reset-{what:?}"), label, what == Kept::Everything).on_click(
+                    cx.listener(move |s, _, _, cx| {
+                        s.storage_confirm = Some(what);
+                        cx.notify();
+                    }),
+                ))
+            }
+        };
+        let row = |what: Kept, title: String, said: String, size: u64, detail: Option<String>, cx: &mut Context<Self>| {
+            div()
+                .flex()
+                .items_start()
+                .gap(px(14.0))
+                .py(px(12.0))
+                .border_t_1()
+                .border_color(line())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(div().text_size(px(13.0)).text_color(text()).child(title))
+                                .when(what == Kept::History, |d| d.child(chip(t!("storage.cache").into_owned(), blue())))
+                                .child(div().font_family(MONO).text_size(px(11.0)).text_color(faint()).child(match size {
+                                    0 => t!("storage.nothing").into_owned(),
+                                    // Settings and layouts are a few thousand bytes: "0 MB" would say nothing.
+                                    1..1_000_000 => t!("ui.kb", n = size.div_ceil(1000)).into_owned(),
+                                    _ => bytes(size),
+                                })),
+                        )
+                        .child(div().text_size(px(12.0)).line_height(px(17.0)).text_color(muted()).child(said))
+                        .children(detail.map(|d| div().text_size(px(12.0)).text_color(faint()).child(d))),
+                )
+                .child(reset(what, cx))
+        };
+        let st = &self.storage;
+        let history = self.usage.as_ref().map(|u| {
+            if !u.ready {
+                return t!("storage.history_reading", read = bytes(u.read_bytes), total = bytes(u.total_bytes)).into_owned();
+            }
+            let replies: u64 = u.days.iter().map(|d| d.t.n).sum();
+            t!(
+                "storage.history_detail",
+                transcripts = i18n::count("storage.transcripts_n", u.scanned as u64),
+                replies = i18n::count("dash.replies_n", replies),
+                read = bytes(u.read_bytes)
+            )
+            .into_owned()
+        });
+        let dir = settings::data_dir();
+        let folder = div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .pb(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(MONO)
+                    .text_size(px(11.0))
+                    .text_color(faint())
+                    .child(dir.display().to_string()),
+            )
+            .child(
+                div()
+                    .id("storage-folder")
+                    .flex_none()
+                    .text_size(px(12.0))
+                    .text_color(blue())
+                    .cursor_pointer()
+                    .hover(|s| s.underline())
+                    .child(t!("storage.open_folder").into_owned())
+                    .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&dir))),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .child(folder)
+            .child(row(Kept::History, t!("storage.history").into_owned(), t!("storage.history_sub").into_owned(), st.history, history, cx))
+            .child(row(Kept::Layout, t!("storage.layout").into_owned(), t!("storage.layout_sub").into_owned(), st.layout, None, cx))
+            .child(row(
+                Kept::Agents,
+                t!("storage.agents").into_owned(),
+                t!("storage.agents_sub").into_owned(),
+                st.agents,
+                (st.agent_files > 0).then(|| i18n::count("storage.files_n", st.agent_files as u64)),
+                cx,
+            ))
+            .child(row(
+                Kept::Preferences,
+                t!("storage.preferences").into_owned(),
+                t!("storage.preferences_sub").into_owned(),
+                st.preferences,
+                None,
+                cx,
+            ))
+            .child(div().pt(px(14.0)).border_t_1().border_color(line()).flex().child(div().flex_1()).child(reset(Kept::Everything, cx)))
+    }
+
     /// "What's new" of the settings: asks this version's notes from GitHub and shows them in the version window.
     fn show_whats_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.notes_loading {
@@ -1201,11 +1389,10 @@ impl Shell {
         .detach();
     }
 
-    /// "Check for Updates…" of the system's menus: the settings open on their updates page and check, so the answer
-    /// is in the app's own window.
+    /// "Check for Updates…" of the system's menus: the settings open and check, so the answer is in the app's own
+    /// window, under the version at the bottom of their sidebar.
     fn check_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(window, cx);
-        self.settings_page = SettingsPage::Updates;
         self.check_updates(cx);
     }
 
@@ -1486,38 +1673,39 @@ impl Shell {
         let system = t!("language.system", name = i18n::name(settings::system_language())).into_owned();
         let mut languages = vec![choice("lang-system", system, None)];
         languages.extend(i18n::LANGUAGES.iter().map(|l| choice(l.code, l.name.to_string(), Some(l.code))));
+        // Next to the version: a small arrow that checks for a newer one now, and what it found under it.
         let check = div()
             .id("settings-check")
             .flex_none()
-            .px(px(12.0))
-            .h(px(30.0))
+            .size(px(22.0))
             .flex()
             .items_center()
-            .rounded(px(8.0))
-            .text_size(px(12.0))
-            .border_1()
-            .border_color(if self.update_checking { line() } else { rgba(0x38bdf866) })
-            .text_color(if self.update_checking { faint() } else { blue() })
+            .justify_center()
+            .rounded(px(6.0))
             .when(!self.update_checking, |d| d.cursor_pointer().hover(|s| s.bg(panel_hi())))
-            .child(if self.update_checking { t!("settings.checking") } else { t!("settings.check") }.into_owned())
+            .child(crate::icons::line(IconName::RefreshCw, if self.update_checking { faint() } else { blue() }, 13.0))
+            .tooltip(|_, cx| cx.new(|_| Tip { title: t!("settings.check").into_owned(), detail: String::new() }).into())
             .on_click(cx.listener(|s, _, _, cx| s.check_updates(cx)));
-        let answer = self.update_answer.clone().map(|Said { level, title, detail }| {
-            let warning = level == PromptLevel::Warning;
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .text_size(px(12.0))
-                .child(div().text_color(if warning { red() } else { text() }).child(title))
-                .child(div().text_color(muted()).child(detail))
-        });
+        let answer = if self.update_checking {
+            Some(div().text_size(px(11.0)).text_color(faint()).child(t!("settings.checking").into_owned()))
+        } else {
+            self.update_answer.clone().map(|Said { level, title, detail }| {
+                let warning = level == PromptLevel::Warning;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .text_size(px(11.0))
+                    .line_height(px(15.0))
+                    .child(div().text_color(if warning { red() } else { text() }).child(title))
+                    .child(div().text_color(muted()).child(detail))
+            })
+        };
         let page = self.settings_page;
         let pages = [
             (SettingsPage::Language, IconName::Languages, t!("settings.language")),
             (SettingsPage::Machines, IconName::Server, t!("settings.machines")),
-            (SettingsPage::Updates, IconName::Download, t!("settings.updates")),
+            (SettingsPage::Storage, IconName::Database, t!("storage.title")),
         ];
         let dot = self.machines_dot(cx);
         let nav = div()
@@ -1559,7 +1747,10 @@ impl Shell {
                     .child(div().flex_1().child(label.to_string()))
                     .children(dot.filter(|_| p == SettingsPage::Machines).map(|c| div().size(px(6.0)).rounded_full().bg(c)))
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        (s.settings_page, s.machine_remove) = (p, None);
+                        (s.settings_page, s.machine_remove, s.storage_confirm) = (p, None, None);
+                        if p == SettingsPage::Storage {
+                            s.storage = Storage::measure();
+                        }
                         cx.notify();
                     }))
             }))
@@ -1574,10 +1765,18 @@ impl Shell {
                     .gap(px(4.0))
                     .child(
                         div()
-                            .text_size(px(12.0))
-                            .text_color(faint())
-                            .child(t!("settings.version", version = env!("CARGO_PKG_VERSION")).into_owned()),
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(faint())
+                                    .child(t!("settings.version", version = env!("CARGO_PKG_VERSION")).into_owned()),
+                            )
+                            .child(check),
                     )
+                    .children(answer)
                     .child(
                         div()
                             .id("settings-whats-new")
@@ -1600,12 +1799,9 @@ impl Shell {
             SettingsPage::Machines => div()
                 .child(section(t!("settings.machines").into_owned(), t!("machines.intro").into_owned()))
                 .child(self.machines_section(cx)),
-            SettingsPage::Updates => div()
-                .child(section(
-                    t!("settings.updates").into_owned(),
-                    t!("settings.version", version = env!("CARGO_PKG_VERSION")).into_owned(),
-                ))
-                .child(div().flex().items_start().gap(px(14.0)).child(check).children(answer)),
+            SettingsPage::Storage => {
+                div().child(section(t!("storage.title").into_owned(), t!("storage.sub").into_owned())).child(self.storage_section(cx))
+            }
         };
         let card = div()
             .id("settings")
@@ -2307,7 +2503,61 @@ impl Render for Nothing {
 enum SettingsPage {
     Language,
     Machines,
-    Updates,
+    Storage,
+}
+
+/// What Asterism keeps on this computer, by kind: each can be reset on the settings' storage page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kept {
+    /// What was read of the transcripts: a cache.
+    History,
+    /// Where each bubble was left on the map.
+    Layout,
+    /// The settings file, without the other machines.
+    Preferences,
+    /// The agents downloaded for other machines.
+    Agents,
+    Everything,
+}
+
+/// How much each kind takes on disk, measured when the storage page opens and after a reset.
+#[derive(Default)]
+struct Storage {
+    history: u64,
+    layout: u64,
+    preferences: u64,
+    agents: u64,
+    agent_files: usize,
+}
+
+impl Storage {
+    fn measure() -> Storage {
+        let dir = settings::data_dir();
+        let size = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |m| m.len());
+        let agents: Vec<u64> = std::fs::read_dir(dir.join("agents"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|f| f.metadata().ok())
+            .map(|m| m.len())
+            .collect();
+        Storage {
+            history: std::fs::metadata(settings::history_file()).map_or(0, |m| m.len()),
+            layout: LAYOUT_FILES.iter().map(|f| size(f)).sum(),
+            preferences: size("settings.json"),
+            agents: agents.iter().sum(),
+            agent_files: agents.len(),
+        }
+    }
+}
+
+/// The files of the map's layout: the one per range, and the single one of the first versions.
+const LAYOUT_FILES: [&str; 2] = ["positions-by-range.json", "positions.json"];
+
+/// Whether a reset may remove files: always, except in a snapshot build that was not given its own folder
+/// (MDB_DATA_DIR), where the files are the real ones.
+fn may_remove_files() -> bool {
+    !cfg!(feature = "snapshot") || std::env::var_os("MDB_DATA_DIR").is_some()
 }
 
 /// What the window about a version is for.

@@ -70,7 +70,7 @@ fn main() {
             let cache = if cfg!(feature = "snapshot") {
                 std::env::var_os("MDB_CACHE").map(std::path::PathBuf::from)
             } else {
-                Some(settings::data_dir().join("history.json"))
+                Some(settings::history_file())
             };
             asterism_core::graph::follow(&home, cache.as_deref(), |graph, usage| gtx.send(Some(machines::merged(graph, usage))).is_ok());
         })

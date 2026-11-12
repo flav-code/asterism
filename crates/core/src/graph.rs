@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Before the full scan is done, transcripts of sessions idle for longer than this are not read.
@@ -403,18 +404,24 @@ impl Visualizer {
     }
 
     /// A visualizer that already knows what `save` kept in `path`. It starts from nothing instead when there is no
-    /// such file, when another version wrote it, or when a transcript it counted is gone: what that one added to the
-    /// totals cannot be taken back out.
+    /// such file, when another version wrote it, or when a transcript that counted replies is gone: what that one
+    /// added to the totals cannot be taken back out. A transcript gone without a counted reply is only forgotten:
+    /// sessions that never answered come and go all day.
     #[must_use]
     pub fn restore(path: &Path) -> Visualizer {
         let saved = fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok())
-            .filter(|s| s.version == env!("CARGO_PKG_VERSION") && s.transcripts.files.keys().all(|f| f.exists()));
-        match saved {
-            Some(s) => Visualizer { transcripts: s.transcripts, usage: s.usage, ..Default::default() },
-            None => Visualizer::default(),
+            .filter(|s| s.version == env!("CARGO_PKG_VERSION"));
+        let Some(mut s) = saved else { return Visualizer::default() };
+        let gone: Vec<PathBuf> = s.transcripts.files.keys().filter(|f| !f.exists()).cloned().collect();
+        if gone.iter().any(|f| s.transcripts.files[f].tokens.total.n > 0) {
+            return Visualizer::default();
         }
+        for f in &gone {
+            s.transcripts.files.remove(f);
+        }
+        Visualizer { transcripts: s.transcripts, usage: s.usage, ..Default::default() }
     }
 
     fn list(&mut self, home: &Path) {
@@ -816,6 +823,14 @@ impl Visualizer {
 /// at most.
 const SAVE_EVERY: Duration = Duration::from_secs(300);
 
+/// Set by `read_again`, taken by `follow` at its next step.
+static READ_AGAIN: AtomicBool = AtomicBool::new(false);
+
+/// Makes `follow` forget what it read, its file on disk too, and read the whole history again.
+pub fn read_again() {
+    READ_AGAIN.store(true, Ordering::Relaxed);
+}
+
 /// Builds the map again and again from the files under `home`: in quick steps while the history is first read, then
 /// every 2 s. `send` gets each map with the latest usage, and returns false to stop. With a `cache` file, what was
 /// read is kept there and the next call starts from it.
@@ -827,6 +842,12 @@ pub fn follow(home: &Path, cache: Option<&Path>, mut send: impl FnMut(Arc<Graph>
     let mut sys = System::new().expect("sysinfo supports this OS");
     let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
     loop {
+        if READ_AGAIN.swap(false, Ordering::Relaxed) {
+            if let Some(path) = cache {
+                fs::remove_file(path).ok();
+            }
+            (viz, kept, kept_at, usage_version) = (Visualizer::default(), 0, Instant::now() - SAVE_EVERY, u64::MAX);
+        }
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
         let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
         let desktop = store.refresh(home);
@@ -1033,7 +1054,16 @@ mod tests {
         fs::write(&file, reply("msg_1", 100) + &reply("msg_2", 50)).unwrap();
         assert_eq!(read(&mut second).1, 150);
 
-        // A counted transcript that is gone: the totals cannot be trusted, so nothing is restored.
+        // A transcript that never counted a reply may vanish: it is forgotten and the rest is kept.
+        let empty = dir.join("bbb.jsonl");
+        fs::write(&empty, "{\"type\":\"system\"}\n").unwrap();
+        read(&mut second);
+        assert!(second.save(&cache));
+        fs::remove_file(&empty).unwrap();
+        let third = Visualizer::restore(&cache);
+        assert_eq!((third.transcripts.files.len(), third.usage_view().days.iter().map(|d| d.t.o).sum::<u64>()), (1, 150));
+
+        // A transcript that counted replies and is gone: the totals cannot be trusted, so nothing is restored.
         fs::remove_file(&file).unwrap();
         assert_eq!(Visualizer::restore(&cache).transcripts.read_bytes(), 0);
         fs::remove_dir_all(&home).ok();

@@ -12,11 +12,10 @@
   },
   "settings": {
     "title": "Settings",
-    "button_sub": "Language, other machines, updates",
+    "button_sub": "Language, other machines, storage",
     "language": "Language",
     "language_sub": "Asterism follows your system's language unless you pick one.",
     "machines": "Other machines",
-    "updates": "Updates",
     "version": "Asterism %{version}",
     "check": "Check for updates",
     "checking": "Checking…"
@@ -349,6 +348,7 @@
   },
   "ui": {
     "gb": "%{n} GB",
+    "kb": "%{n} KB",
     "mb": "%{n} MB",
     "kb_s": "%{n} KB/s",
     "mb_s": "%{n} MB/s",
@@ -369,6 +369,34 @@
       "off_detail": "ASTERISM_NO_UPDATES is set.",
       "failed": "Couldn't check for updates"
     }
+  },
+  "storage": {
+    "title": "Storage",
+    "sub": "What Asterism keeps on this computer. None of it leaves it, and the other machines you added are never reset from here.",
+    "open_folder": "Open the folder",
+    "cache": "cache",
+    "nothing": "nothing kept",
+    "history": "History",
+    "history_sub": "What was read of your transcripts, so that a launch reads only what is new. A cache: resetting it loses nothing, the history is read again.",
+    "history_detail": "%{transcripts} · %{replies} · %{read} read",
+    "history_reading": "Being read: %{read} of %{total}",
+    "transcripts_n": {
+      "one": "%{n} transcript",
+      "other": "%{n} transcripts"
+    },
+    "layout": "Map layout",
+    "layout_sub": "Where you left each bubble, for each range. Reset, the map lays itself out again.",
+    "agents": "Agents for other machines",
+    "agents_sub": "Downloaded to be copied to your servers. Reset, the one a machine needs is downloaded again.",
+    "files_n": {
+      "one": "%{n} file",
+      "other": "%{n} files"
+    },
+    "preferences": "Preferences",
+    "preferences_sub": "The tab, the ranges, the filters, the panel, the language. The language changes at once, the rest at the next launch.",
+    "reset": "Reset",
+    "reset_all": "Reset everything",
+    "yes": "Yes, reset"
   },
   "version": {
     "ready": "Asterism %{version} is available",

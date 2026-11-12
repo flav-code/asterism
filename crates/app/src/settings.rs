@@ -59,6 +59,12 @@ impl Default for Settings {
 }
 
 pub fn data_dir() -> PathBuf {
+    // Snapshot builds can keep their files elsewhere (MDB_DATA_DIR), so that a test never touches the real ones.
+    if cfg!(feature = "snapshot")
+        && let Some(dir) = std::env::var_os("MDB_DATA_DIR")
+    {
+        return PathBuf::from(dir);
+    }
     #[allow(deprecated)]
     let home = std::env::home_dir().unwrap_or_default();
     if cfg!(target_os = "macos") {
@@ -68,6 +74,11 @@ pub fn data_dir() -> PathBuf {
     } else {
         home.join(".config/asterism")
     }
+}
+
+/// Where what was read of the history is kept between launches.
+pub fn history_file() -> PathBuf {
+    data_dir().join("history.json")
 }
 
 /// The app was called my-dev-business: its settings and saved map move to the new folder once.
@@ -170,6 +181,12 @@ pub fn system_language() -> &'static str {
 /// Shows the window in the chosen language (or the system's), from now on and at the next launch.
 pub fn set_language(cx: &mut App, language: Option<String>) {
     change(cx, |s| s.language = language);
+    apply_language(cx);
+}
+
+/// Back to the defaults, except what is not a preference: the other machines and the version last seen.
+pub fn reset(cx: &mut App) {
+    change(cx, |s| *s = Settings { machines: std::mem::take(&mut s.machines), seen_version: s.seen_version.take(), ..Settings::default() });
     apply_language(cx);
 }
 

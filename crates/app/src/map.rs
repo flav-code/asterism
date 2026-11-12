@@ -78,6 +78,8 @@ pub struct MapView {
     tx: f32,
     ty: f32,
     fit_pending: bool,
+    /// The saved places are to be forgotten at the next data: the map is laid out from nothing.
+    forget: bool,
     zoom: Option<Zooming>,
     canvas: Rc<Cell<Bounds<Pixels>>>,
     hover: Option<usize>,
@@ -153,6 +155,11 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
 }
 
 impl MapView {
+    /// Forgets where every bubble was left: the next data lays the map out again. The caller removes the files.
+    pub fn forget_layout(&mut self) {
+        self.forget = true;
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         let saved_by_range = std::fs::read(settings::data_dir().join("positions-by-range.json"))
             .ok()
@@ -193,6 +200,7 @@ impl MapView {
             tx: 0.0,
             ty: 0.0,
             fit_pending: true,
+            forget: false,
             zoom: None,
             canvas: Rc::new(Cell::new(Bounds::default())),
             hover: None,
@@ -238,6 +246,11 @@ impl MapView {
 
     pub fn set_graph(&mut self, graph: Arc<Graph>, filters: &Filters, cx: &mut Context<Self>) {
         let first = self.graph.is_none();
+        if std::mem::take(&mut self.forget) {
+            (self.saved, self.saved_by_range) = (HashMap::new(), HashMap::new());
+            (self.body_of, self.sim.bodies, self.newcomers) = (HashMap::new(), Vec::new(), HashSet::new());
+            (self.first_layout, self.fit_pending) = (true, true);
+        }
         // New messages fly from sender to receiver (not the ones already there when the map opened).
         for m in &graph.messages {
             if self.seen.insert(m.id.clone()) && !first && crate::ui::now_ms().saturating_sub(m.ts) < 60_000 {
