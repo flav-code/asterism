@@ -185,8 +185,9 @@ struct Dash {
     agent_share: f64,
     sessions: Vec<SessionRow>,
     models: Vec<ModelRow>,
-    /// Per weekday (Monday first), per hour.
-    heat: [[HeatCell; 24]; 7],
+    /// "When you work": a row per day when the range is a week or less (`heat_by_day`), else per weekday.
+    heat: Vec<HeatRow>,
+    heat_by_day: bool,
     /// The last 120 minutes.
     live: Vec<Minute>,
     facts: [Fact; 6],
@@ -226,11 +227,27 @@ fn no_price_models<'a>(rows: impl Iterator<Item = &'a DayRow>) -> Vec<String> {
     names
 }
 
-/// One hour of one weekday.
+/// One hour of a row of "When you work".
 #[derive(Clone, Copy, Default)]
 struct HeatCell {
     replies: f64,
     usd: f64,
+}
+
+/// A row of "When you work": one day, or one weekday over the range.
+struct HeatRow {
+    label: String,
+    cells: [HeatCell; 24],
+}
+
+/// The grid's left edge, after its row labels: a day ("Thu 12") is wider than a weekday.
+fn heat_left(by_day: bool) -> f32 {
+    if by_day { 48.0 } else { 34.0 }
+}
+
+/// A row's height: a single row (today) is taller, so it does not look lost in its card.
+fn heat_row_h(rows: usize) -> f32 {
+    if rows == 1 { 2.0 * CELL_H } else { CELL_H }
 }
 
 /// One minute of the live chart.
@@ -368,12 +385,28 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     // The models with no price first: nothing says how they compare, and they are what needs an update.
     models.sort_by(|a, b| a.priced.cmp(&b.priced).then(b.usd.total_cmp(&a.usd)).then(b.output.total_cmp(&a.output)));
 
-    let mut heat = [[HeatCell::default(); 24]; 7];
+    // A week or less shows each of its days: added up by weekday, most rows of "today" would stay empty.
+    let heat_by_day = matches!(range, Range::Today | Range::Days(..=7));
+    let mut heat: Vec<HeatRow> = if heat_by_day {
+        let days = (today - start).num_days().max(0);
+        (0..=days)
+            .map(|i| {
+                let d = start + chrono::Duration::days(i);
+                let label = if d == today { t!("dash.today").into_owned() } else { d.format(&i18n::names(&d, "%a %-d")).to_string() };
+                HeatRow { label, cells: [HeatCell::default(); 24] }
+            })
+            .collect()
+    } else {
+        (0..7).map(|wd| HeatRow { label: weekday(wd), cells: [HeatCell::default(); 24] }).collect()
+    };
     for h in u.hours.iter().filter(|h| h.h.as_str() >= start_key.as_str()) {
         if let (Some(d), Ok(hr)) = (parse_day(&h.h), h.h[11..].parse::<usize>()) {
-            let cell = &mut heat[d.weekday().num_days_from_monday() as usize][hr.min(23)];
-            cell.replies += h.t.n as f64;
-            cell.usd += h.t.usd;
+            let row = if heat_by_day { (d - start).num_days() } else { i64::from(d.weekday().num_days_from_monday()) };
+            if let Some(row) = usize::try_from(row).ok().and_then(|r| heat.get_mut(r)) {
+                let cell = &mut row.cells[hr.min(23)];
+                cell.replies += h.t.n as f64;
+                cell.usd += h.t.usd;
+            }
         }
     }
 
@@ -459,6 +492,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
         sessions,
         models,
         heat,
+        heat_by_day,
         live,
         facts,
     }
@@ -521,7 +555,7 @@ pub enum DashEvent {
 enum Hover {
     Col(usize),
     Minute(usize),
-    Cell { weekday: usize, hour: usize },
+    Cell { row: usize, hour: usize },
 }
 
 /// The data, range, metric, minute and language a `Dash` was worked out for.
@@ -646,11 +680,12 @@ impl DashView {
             return Some(Hover::Minute(i as usize));
         }
         if h.contains(&p) {
-            let cw = (f32::from(h.size.width) - 34.0) / 24.0;
-            let (x, y) = (f32::from(p.x - h.origin.x) - 34.0, f32::from(p.y - h.origin.y) - 16.0);
-            let (hr, wd) = ((x / cw).floor(), (y / CELL_H).floor());
-            if (0.0..24.0).contains(&hr) && (0.0..7.0).contains(&wd) {
-                return Some(Hover::Cell { weekday: wd as usize, hour: hr as usize });
+            let left = heat_left(d.heat_by_day);
+            let cw = (f32::from(h.size.width) - left) / 24.0;
+            let (x, y) = (f32::from(p.x - h.origin.x) - left, f32::from(p.y - h.origin.y) - 16.0);
+            let (hr, row) = ((x / cw).floor(), (y / heat_row_h(d.heat.len())).floor());
+            if (0.0..24.0).contains(&hr) && (0.0..d.heat.len() as f32).contains(&row) {
+                return Some(Hover::Cell { row: row as usize, hour: hr as usize });
             }
         }
         None
@@ -823,12 +858,13 @@ impl Render for DashView {
         let live_max_target = d.live.iter().map(|m| m.output).fold(0.0, f64::max).max(1.0);
         let live_max = a.val("lmax".into(), live_max_target, live_max_target);
         let live_now: Vec<f64> = d.live.iter().map(|m| a.val(format!("m{}", m.at), m.output, 0.0)).collect();
-        let heat_max = d.heat.iter().flatten().map(|c| c.replies).fold(0.0, f64::max).max(1.0);
-        let heat_now: Vec<f64> = (0..7 * 24)
+        let heat_max = d.heat.iter().flat_map(|r| &r.cells).map(|c| c.replies).fold(0.0, f64::max).max(1.0);
+        let heat_now: Vec<f64> = (0..d.heat.len() * 24)
             .map(|i| {
-                let n = d.heat[i / 24][i % 24].replies;
+                let n = d.heat[i / 24].cells[i % 24].replies;
                 let level = if n > 0.0 { 1.0 + ((n / heat_max).sqrt() * 5.0).floor().min(4.0) } else { 0.0 };
-                a.val(format!("h{i}"), level, 0.0)
+                // Days and weekdays are different grids: one does not fade into the other.
+                a.val(format!("h{}{i}", if d.heat_by_day { 'd' } else { 'w' }), level, 0.0)
             })
             .collect();
         let model_share: Vec<f64> = d.models.iter().map(|m| a.val(format!("lm{}", m.name), m.usd / d.tot_usd.max(1e-9), 0.0)).collect();
@@ -1127,6 +1163,9 @@ impl Render for DashView {
         .h(px(CHART_H));
 
         // When you work.
+        let heat_d = d.clone();
+        let (heat_l, heat_h) = (heat_left(d.heat_by_day), heat_row_h(d.heat.len()));
+        let heat_rows_h = d.heat.len() as f32 * heat_h;
         let heat = canvas(
             {
                 let cell = self.heat.clone();
@@ -1135,7 +1174,7 @@ impl Render for DashView {
             move |b, _, window, cx| {
                 let o = b.origin;
                 let w = f32::from(b.size.width);
-                let (l, t) = (34.0, 16.0);
+                let (l, t) = (heat_l, 16.0);
                 let cw = (w - l) / 24.0;
                 for h in [0, 6, 12, 18, 23] {
                     paint_text(
@@ -1150,12 +1189,12 @@ impl Render for DashView {
                         true,
                     );
                 }
-                for wd in 0..7 {
+                for (wd, row) in heat_d.heat.iter().enumerate() {
                     paint_text(
                         window,
                         cx,
-                        weekday(wd).into(),
-                        (o.x, o.y + px(t + wd as f32 * CELL_H + CELL_H / 2.0)),
+                        row.label.clone().into(),
+                        (o.x, o.y + px(t + wd as f32 * heat_h + heat_h / 2.0)),
                         0.0,
                         10.5,
                         faint(),
@@ -1165,14 +1204,14 @@ impl Render for DashView {
                     for hr in 0..24 {
                         let color = heat_color(heat_now[wd * 24 + hr] as f32);
                         let cell = Bounds::new(
-                            o + point(px(l + hr as f32 * cw + 1.0), px(t + wd as f32 * CELL_H + 1.0)),
-                            size(px(cw - 2.0), px(CELL_H - 2.0)),
+                            o + point(px(l + hr as f32 * cw + 1.0), px(t + wd as f32 * heat_h + 1.0)),
+                            size(px(cw - 2.0), px(heat_h - 2.0)),
                         );
-                        let ring = if hover == Some(Hover::Cell { weekday: wd, hour: hr }) { rgba(0xffffffb0) } else { rgba(0) };
+                        let ring = if hover == Some(Hover::Cell { row: wd, hour: hr }) { rgba(0xffffffb0) } else { rgba(0) };
                         window.paint_quad(quad(cell, px(2.0), color, px(1.0), ring, BorderStyle::Solid));
                     }
                 }
-                let (ly, lx) = (t + 7.0 * CELL_H + 18.0, w - 5.0 * 16.0 - 40.0);
+                let (ly, lx) = (t + heat_rows_h + 18.0, w - 5.0 * 16.0 - 40.0);
                 paint_text(
                     window,
                     cx,
@@ -1208,7 +1247,7 @@ impl Render for DashView {
             },
         )
         .w_full()
-        .h(px(16.0 + 7.0 * CELL_H + 30.0));
+        .h(px(16.0 + heat_rows_h + 30.0));
 
         let legend = div().flex().gap(px(12.0)).children(d.legend.iter().map(|f| {
             div()
@@ -1295,6 +1334,12 @@ impl Render for DashView {
             let models = u.unpriced.iter().map(|(m, n)| format!("{m} ({n})")).collect::<Vec<_>>().join(", ");
             format!(" {}", t!("dash.not_priced", models = models))
         };
+        let heat_sub = match (self.range, d.heat_by_day) {
+            (Range::Today, _) => t!("dash.card.heat_sub_today"),
+            (_, true) => t!("dash.card.heat_sub_days"),
+            _ => t!("dash.card.heat_sub"),
+        }
+        .into_owned();
         let row = || div().flex().gap(px(12.0)).mb(px(12.0));
         let content = div()
             .px(px(20.0))
@@ -1308,17 +1353,12 @@ impl Render for DashView {
                     .child(span(card(t!("dash.card.live").into_owned(), None).child(live), 4.0)),
             )
             .child(
-                row()
-                    .child(span(
-                        card(t!("dash.card.heat").into_owned(), Some(small(t!("dash.card.heat_sub").into_owned()))).child(heat),
-                        6.0,
-                    ))
-                    .child(span(
-                        card(t!("dash.card.models").into_owned(), Some(small(t!("dash.card.models_sub").into_owned())))
-                            .children(models)
-                            .when(d.models.is_empty(), |c| c.child(empty())),
-                        6.0,
-                    )),
+                row().child(span(card(t!("dash.card.heat").into_owned(), Some(small(heat_sub))).child(heat), 6.0)).child(span(
+                    card(t!("dash.card.models").into_owned(), Some(small(t!("dash.card.models_sub").into_owned())))
+                        .children(models)
+                        .when(d.models.is_empty(), |c| c.child(empty())),
+                    6.0,
+                )),
             )
             .child(
                 row()
@@ -1391,9 +1431,9 @@ impl Render for DashView {
                         )),
                     )
                 }
-                Hover::Cell { weekday: wd, hour: hr } => {
-                    let HeatCell { replies: n, usd: v } = d.heat[wd][hr];
-                    tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", weekday(wd)))).child(
+                Hover::Cell { row, hour: hr } => {
+                    let HeatCell { replies: n, usd: v } = d.heat[row].cells[hr];
+                    tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", d.heat[row].label))).child(
                         div().text_size(px(12.0)).text_color(muted()).child(format!(
                             "{} · {}",
                             i18n::count("dash.replies_n", n as u64),

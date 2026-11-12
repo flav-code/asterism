@@ -159,7 +159,9 @@
     "card": {
       "live": "2 dernières heures",
       "heat": "Quand vous travaillez",
-      "heat_sub": "réponses par jour et par heure",
+      "heat_sub": "réponses par jour de la semaine et par heure",
+      "heat_sub_days": "réponses par jour et par heure",
+      "heat_sub_today": "réponses par heure, aujourd'hui",
       "models": "Par modèle",
       "models_sub": "part de la valeur",
       "sessions": "Principales sessions",

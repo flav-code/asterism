@@ -160,6 +160,8 @@
       "live": "Last 2 hours",
       "heat": "When you work",
       "heat_sub": "replies per weekday and hour",
+      "heat_sub_days": "replies per day and hour",
+      "heat_sub_today": "replies per hour, today",
       "models": "By model",
       "models_sub": "share of the value",
       "sessions": "Top sessions",
