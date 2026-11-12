@@ -182,7 +182,7 @@
       "all_time_sub": "%{n} jetons en sortie"
     },
     "not_priced": "Sans prix : %{models}.",
-    "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 6 oct. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
+    "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 12 nov. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
   },
   "machines": {
     "intro": "Les sessions d'autres machines (VM, serveurs) s'affichent ici aussi. Asterism s'y connecte avec ssh et vos clés, puis y copie un petit agent dans ~/.cache/asterism.",

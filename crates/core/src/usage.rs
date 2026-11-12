@@ -17,19 +17,27 @@ pub struct Price {
 }
 
 /// Anthropic API prices. Cache writes cost 1.25× input (5-minute TTL) or 2× (1-hour TTL). From the published price
-/// list of 2026-10-06.
+/// list of 2026-11-12. A model that is not here counts for $0 and is named under the usage tab: add it when it comes out.
 pub const PRICES: &[Price] = &[
+    Price { model: "claude-fable-5-2", input: 8.0, output: 40.0, cache_read: 0.2 },
+    Price { model: "claude-mythos-5-2", input: 8.0, output: 40.0, cache_read: 0.2 },
     Price { model: "claude-fable-5-1", input: 10.0, output: 50.0, cache_read: 0.25 },
     Price { model: "claude-mythos-5-1", input: 10.0, output: 50.0, cache_read: 0.25 },
     Price { model: "claude-fable-5", input: 10.0, output: 50.0, cache_read: 1.0 },
+    Price { model: "claude-mythos-5", input: 10.0, output: 50.0, cache_read: 1.0 },
     Price { model: "claude-opus-5-5", input: 4.0, output: 20.0, cache_read: 0.2 },
     Price { model: "claude-opus-5", input: 5.0, output: 25.0, cache_read: 0.5 },
     Price { model: "claude-opus-4-8", input: 5.0, output: 25.0, cache_read: 0.5 },
     Price { model: "claude-opus-4-7", input: 5.0, output: 25.0, cache_read: 0.5 },
     Price { model: "claude-opus-4-6", input: 5.0, output: 25.0, cache_read: 0.5 },
-    Price { model: "claude-sonnet-5-5", input: 2.0, output: 10.0, cache_read: 0.2 },
+    Price { model: "claude-opus-4-5", input: 5.0, output: 25.0, cache_read: 0.5 },
+    Price { model: "claude-opus-4-1", input: 15.0, output: 75.0, cache_read: 1.5 },
+    Price { model: "claude-opus-4", input: 15.0, output: 75.0, cache_read: 1.5 },
+    Price { model: "claude-sonnet-5-5", input: 2.0, output: 10.0, cache_read: 0.1 },
     Price { model: "claude-sonnet-5", input: 2.0, output: 10.0, cache_read: 0.2 },
     Price { model: "claude-sonnet-4-6", input: 3.0, output: 15.0, cache_read: 0.3 },
+    Price { model: "claude-sonnet-4-5", input: 3.0, output: 15.0, cache_read: 0.3 },
+    Price { model: "claude-sonnet-4", input: 3.0, output: 15.0, cache_read: 0.3 },
     Price { model: "claude-haiku-5-5", input: 0.1, output: 0.5, cache_read: 0.01 },
     Price { model: "claude-haiku-4-5", input: 1.0, output: 5.0, cache_read: 0.1 },
 ];
@@ -239,6 +247,10 @@ mod tests {
             10.0,
         );
         close(cost("claude-haiku-5-5", &json!({ "input_tokens": 2e5 })), 0.1);
+        close(cost("claude-fable-5-2", &json!({ "input_tokens": 1e6, "output_tokens": 1e6, "cache_read_input_tokens": 1e6 })), 48.2);
+        close(cost("claude-mythos-5-2", &json!({ "output_tokens": 1e6, "speed": "fast" })), 80.0);
+        close(cost("claude-sonnet-5-5", &json!({ "cache_read_input_tokens": 1e6 })), 0.1);
+        close(cost("claude-opus-4-1-20250805", &json!({ "output_tokens": 1e6 })), 75.0);
         assert_eq!(cost("gpt-9", &json!({ "output_tokens": 1 })), None);
         assert_eq!(model_id("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
     }
