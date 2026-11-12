@@ -20,7 +20,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: v
         name: The tag matches the version in Cargo.toml
         run: |
@@ -37,13 +37,13 @@ jobs:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
       - run: TARGET=${{ matrix.target }} scripts/package-macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.target }}
           path: dist/*.dmg
@@ -52,7 +52,7 @@ jobs:
     needs: check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p asterism
       # Nobody else runs it on Windows before release: it must start, stay up, and show its window (the
@@ -118,7 +118,7 @@ jobs:
           $img.Save("$PWD\windows.png")
           if ($p.HasExited) { throw "Asterism quit with code $($p.ExitCode)" }
           Stop-Process $p
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: screenshot-windows
@@ -135,7 +135,7 @@ jobs:
           Push-Location scripts\windows
           makensis /DVERSION=$v /DEXE=$exe /DOUTFILE=$out asterism.nsi
           Pop-Location
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/*.exe
@@ -150,7 +150,7 @@ jobs:
           - { target: aarch64-unknown-linux-musl, arch: arm64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -168,36 +168,37 @@ jobs:
           first=$( (sleep 3) | HOME=$PWD/home "$out" serve | head -1)
           echo "$first"
           [ "$first" = "{\"asterism\":\"$v\"}" ]
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent-${{ matrix.arch }}
           path: dist/*
 
   publish:
     needs: [check, macos, windows, agents]
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       # The whole history, for the notes: the commits since the release before.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: src
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: macos-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: agent-*
           path: dist
           merge-multiple: true
+      # A run by hand stops here: it has fetched what the jobs above built, and publishes nothing.
       - name: Release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
