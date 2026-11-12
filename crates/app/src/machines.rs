@@ -310,11 +310,44 @@ fn explain(said: &str, m: &Machine) -> String {
     let hint = if said.contains("Host key verification failed") {
         t!("machines.hint.host_key", target = target)
     } else if said.contains("Permission denied") {
-        t!("machines.hint.permission", target = target)
+        #[allow(deprecated)]
+        let config = std::fs::read_to_string(std::env::home_dir().unwrap_or_default().join(".ssh/config")).unwrap_or_default();
+        match names_in_config(&config, &m.target) {
+            names if names.is_empty() => t!("machines.hint.permission", target = target),
+            names => t!("machines.hint.config_name", names = names.join(", ")),
+        }
     } else {
         return said.to_string();
     };
     format!("{said} — {hint}")
+}
+
+/// The other names an SSH configuration gives a target's machine: the `Host` entries whose `HostName` is its address
+/// (the target's own, or the one its entry gives). An entry sets things for its names only (a key, an agent, a
+/// user): typed as an address or under another name, a machine gets none of them and is refused where the right
+/// name is let in. Names with an agent of their own come first: that is what an address most often misses.
+fn names_in_config(config: &str, target: &str) -> Vec<String> {
+    let typed = target.rsplit('@').next().unwrap_or(target);
+    // (name, address) for each entry that gives one, and the names an entry gives an agent.
+    let (mut reached, mut with_agent): (Vec<(&str, &str)>, Vec<&str>) = (Vec::new(), Vec::new());
+    let mut entry: Vec<&str> = Vec::new();
+    for line in config.lines() {
+        let mut words = line.split(|c: char| c.is_whitespace() || c == '=').filter(|w| !w.is_empty());
+        match (words.next().map(str::to_lowercase).as_deref(), words.next()) {
+            // Patterns name no machine one could type.
+            (Some("host"), first) => entry = first.into_iter().chain(words).filter(|name| !name.contains(['*', '?', '!'])).collect(),
+            (Some("match"), _) => entry.clear(),
+            (Some("hostname"), Some(address)) => reached.extend(entry.iter().map(|name| (*name, address))),
+            (Some("identityagent"), Some(_)) => with_agent.extend(&entry),
+            _ => {}
+        }
+    }
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let address = reached.iter().find(|(name, _)| same(name, typed)).map_or(typed, |(_, address)| address);
+    let mut names: Vec<&str> = reached.iter().filter(|(name, to)| same(to, address) && !same(name, typed)).map(|(name, _)| *name).collect();
+    names.sort_by_key(|name| (!with_agent.iter().any(|a| same(a, name)), name.to_lowercase()));
+    names.dedup();
+    names.into_iter().map(str::to_string).collect()
 }
 
 /// Copies the agent for this system and processor to the machine, over SSH, into ~/.cache/asterism (where earlier
@@ -441,6 +474,24 @@ mod tests {
         assert!(typed("box", "me@box", "", "/no/such/key", &[]).is_err(), "no file there");
         assert!(typed("box", "", "22", "", &[]).is_err(), "still needs a target");
         assert!(key_file("~/.ssh/id_ed25519").ends_with(".ssh/id_ed25519") && !key_file("~/.ssh/id_ed25519").starts_with("~"));
+    }
+
+    #[test]
+    fn finds_the_other_names_a_configuration_gives_a_machine() {
+        let config = "Host *\n  ServerAliveInterval 30\n\nHost old-box\n  HostName 10.0.0.2\n  IdentityFile ~/.ssh/old\n\n\
+                      Host box box-alt\n  HostName 10.0.0.2\n  User me\n\nHost other\n\tHostName=10.0.0.3\n\n\
+                      Host ABOVE\n  hostname 10.0.0.2\n\nHost box box-alt other\n  IdentityAgent ~/agent.sock\n\n\
+                      Host 10.0.0.9\n  HostName 10.0.0.9\n\nMatch host 10.0.0.2\n  HostName 10.0.0.2\n";
+        // An address: every name that reaches it, those with an agent first.
+        assert_eq!(names_in_config(config, "me@10.0.0.2"), ["box", "box-alt", "ABOVE", "old-box"]);
+        assert_eq!(names_in_config(config, "10.0.0.3"), ["other"]);
+        // A name: the other names of the same machine.
+        assert_eq!(names_in_config(config, "old-box"), ["box", "box-alt", "ABOVE"]);
+        assert_eq!(names_in_config(config, "me@BOX"), ["box-alt", "ABOVE", "old-box"]);
+        assert!(names_in_config(config, "other").is_empty(), "its only name");
+        assert!(names_in_config(config, "me@10.0.0.4").is_empty(), "no entry points there");
+        assert!(names_in_config(config, "10.0.0.9").is_empty(), "an entry named like its own address adds nothing");
+        assert!(names_in_config("", "me@10.0.0.2").is_empty());
     }
 
     #[test]

@@ -228,7 +228,8 @@
     },
     "hint": {
       "host_key": "connectez-vous une fois depuis un terminal (ssh %{target}) pour accepter sa clé",
-      "permission": "ajoutez-y votre clé SSH (ssh-copy-id %{target})"
+      "permission": "ajoutez-y votre clé SSH (ssh-copy-id %{target})",
+      "config_name": "votre configuration SSH donne aussi à cette machine le nom %{names} : l'un de ces noms porte peut-être la clé ou l'agent qui vous laisse entrer, utilisez-le comme hôte SSH"
     }
   },
   "map": {
