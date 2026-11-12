@@ -10,9 +10,10 @@ use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Before the full scan is done, transcripts of sessions idle for longer than this are not read.
 const SCAN_DAYS: u64 = 14;
@@ -189,7 +190,7 @@ pub struct UsageView {
 pub type Family = &'static str;
 
 /// A model family read back from JSON, as one of the names `family` gives.
-fn fam_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+pub(crate) fn fam_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
     let s = String::deserialize(d)?;
     Ok(["Fable", "Opus", "Sonnet", "Haiku"].into_iter().find(|f| *f == s).unwrap_or("Other"))
 }
@@ -370,7 +371,52 @@ struct Titled {
     kind: NodeKind,
 }
 
+/// What a `Visualizer` read, as it is kept on disk. The version is the app's: another one reads the history again,
+/// since it may count it differently (new prices, say).
+#[derive(Serialize)]
+struct Save<'a> {
+    version: &'a str,
+    transcripts: &'a Transcripts,
+    usage: &'a Usage,
+}
+
+#[derive(Deserialize)]
+struct Saved {
+    version: String,
+    transcripts: Transcripts,
+    usage: Usage,
+}
+
 impl Visualizer {
+    /// Keeps what was read so far in `path`, so that the next launch reads only what the transcripts gained since.
+    /// False when it could not be written, which costs only that next read.
+    pub fn save(&self, path: &Path) -> bool {
+        let tmp = path.with_extension("tmp");
+        let save = Save { version: env!("CARGO_PKG_VERSION"), transcripts: &self.transcripts, usage: &self.usage };
+        let written = fs::File::create(&tmp).ok().and_then(|f| {
+            let mut out = std::io::BufWriter::new(f);
+            serde_json::to_writer(&mut out, &save).ok()?;
+            out.flush().ok()
+        });
+        // Renamed once whole: a launch never finds half a file.
+        written.is_some() && fs::rename(&tmp, path).is_ok()
+    }
+
+    /// A visualizer that already knows what `save` kept in `path`. It starts from nothing instead when there is no
+    /// such file, when another version wrote it, or when a transcript it counted is gone: what that one added to the
+    /// totals cannot be taken back out.
+    #[must_use]
+    pub fn restore(path: &Path) -> Visualizer {
+        let saved = fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok())
+            .filter(|s| s.version == env!("CARGO_PKG_VERSION") && s.transcripts.files.keys().all(|f| f.exists()));
+        match saved {
+            Some(s) => Visualizer { transcripts: s.transcripts, usage: s.usage, ..Default::default() },
+            None => Visualizer::default(),
+        }
+    }
+
     fn list(&mut self, home: &Path) {
         let projects = home.join(".claude/projects");
         let mut all = Vec::new();
@@ -766,11 +812,18 @@ impl Visualizer {
     }
 }
 
+/// How often what was read is kept on disk, once the history was read: a launch after a crash reads this much again
+/// at most.
+const SAVE_EVERY: Duration = Duration::from_secs(300);
+
 /// Builds the map again and again from the files under `home`: in quick steps while the history is first read, then
-/// every 2 s. `send` gets each map with the latest usage, and returns false to stop.
-pub fn follow(home: &Path, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> bool) {
+/// every 2 s. `send` gets each map with the latest usage, and returns false to stop. With a `cache` file, what was
+/// read is kept there and the next call starts from it.
+pub fn follow(home: &Path, cache: Option<&Path>, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> bool) {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let (mut store, mut viz) = (DesktopStore::default(), Visualizer::default());
+    let (mut store, mut viz) = (DesktopStore::default(), cache.map_or_else(Visualizer::default, Visualizer::restore));
+    // What the file on disk holds, as bytes of transcripts read, and when it was last written.
+    let (mut kept, mut kept_at) = (viz.transcripts.read_bytes(), Instant::now() - SAVE_EVERY);
     let mut sys = System::new().expect("sysinfo supports this OS");
     let (mut usage, mut usage_version) = (Arc::new(UsageView::default()), u64::MAX);
     loop {
@@ -784,6 +837,14 @@ pub fn follow(home: &Path, mut send: impl FnMut(Arc<Graph>, Arc<UsageView>) -> b
         }
         if !send(Arc::new(graph), usage.clone()) {
             break;
+        }
+        if let Some(path) = cache
+            && viz.ready
+            && kept_at.elapsed() >= SAVE_EVERY
+            && viz.transcripts.read_bytes() != kept
+        {
+            viz.save(path);
+            (kept, kept_at) = (viz.transcripts.read_bytes(), Instant::now());
         }
         std::thread::sleep(if usage.ready { Duration::from_secs(2) } else { Duration::from_millis(16) });
     }
@@ -934,6 +995,47 @@ mod tests {
         let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         ids.sort();
         assert_eq!(ids, ["cli:s8", "local_abc"]);
+        fs::remove_dir_all(&home).ok();
+    }
+
+    /// What was read is kept on disk: a restored visualizer has the same totals, reads only what was added since, and
+    /// starts from nothing when a transcript it counted is gone.
+    #[test]
+    fn what_was_read_is_kept_for_the_next_launch() {
+        let home = std::env::temp_dir().join(format!("asterism-cache-test-{}", std::process::id()));
+        let dir = home.join(".claude/projects/-srv-api");
+        fs::create_dir_all(&dir).unwrap();
+        let reply = |id: &str, out: u64| {
+            serde_json::json!({ "type": "assistant", "timestamp": "2026-11-08T10:01:00Z",
+                "message": { "id": id, "model": "claude-opus-5-5", "usage": { "output_tokens": out }, "content": [{ "type": "text", "text": "Done" }] } })
+            .to_string()
+                + "\n"
+        };
+        let (file, cache) = (dir.join("aaa.jsonl"), home.join("history.json"));
+        fs::write(&file, reply("msg_1", 100)).unwrap();
+        let now = 1_800_000_000_000;
+        let read = |viz: &mut Visualizer| {
+            viz.build(&home, &[], &HashSet::new(), now);
+            viz.build(&home, &[], &HashSet::new(), now);
+            let u = viz.usage_view();
+            (u.ready, u.days.iter().map(|d| d.t.o).sum::<u64>(), viz.transcripts.read_bytes())
+        };
+        let mut first = Visualizer::default();
+        let (_, out, bytes) = read(&mut first);
+        assert_eq!(out, 100);
+        assert!(first.save(&cache));
+
+        // Restored: everything is known before a single byte is read again.
+        let mut second = Visualizer::restore(&cache);
+        assert_eq!(second.transcripts.read_bytes(), bytes);
+        assert_eq!(read(&mut second), (true, 100, bytes));
+        // What the file gains is read, once.
+        fs::write(&file, reply("msg_1", 100) + &reply("msg_2", 50)).unwrap();
+        assert_eq!(read(&mut second).1, 150);
+
+        // A counted transcript that is gone: the totals cannot be trusted, so nothing is restored.
+        fs::remove_file(&file).unwrap();
+        assert_eq!(Visualizer::restore(&cache).transcripts.read_bytes(), 0);
         fs::remove_dir_all(&home).ok();
     }
 

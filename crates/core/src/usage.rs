@@ -110,7 +110,7 @@ impl Totals {
 }
 
 /// One transcript's own totals: overall and per local day.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileTotals {
     pub total: Totals,
     pub days: BTreeMap<String, Totals>,
@@ -126,7 +126,7 @@ pub struct Biggest {
 }
 
 /// What a day's totals are counted by.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DayKey {
     /// The local day, "YYYY-MM-DD".
     pub day: String,
@@ -137,20 +137,43 @@ pub struct DayKey {
 }
 
 /// What an hour's totals are counted by.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HourKey {
     /// The local hour, "YYYY-MM-DDTHH".
     pub hour: String,
     /// The model's family.
-    pub fam: &'static str,
+    #[serde(deserialize_with = "crate::graph::fam_of")]
+    pub fam: crate::graph::Family,
+}
+
+/// A map whose keys are not text, written as a list of pairs: JSON only has text keys.
+mod pairs {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+    use std::hash::Hash;
+
+    pub fn serialize<K: Serialize, V: Serialize, S: Serializer>(map: &HashMap<K, V>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(map)
+    }
+
+    pub fn deserialize<'de, K, V, D>(d: D) -> Result<HashMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
 }
 
 /// Everything counted so far, across all transcripts.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Usage {
     seen: HashSet<String>,
     tool_ids: HashSet<String>,
+    #[serde(with = "pairs")]
     pub day: HashMap<DayKey, Totals>,
+    #[serde(with = "pairs")]
     pub hour: HashMap<HourKey, Totals>,
     /// Minute (ms since the epoch / 60 000) → totals, the last two hours only.
     pub minute: BTreeMap<u64, Totals>,

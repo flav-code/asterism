@@ -123,7 +123,8 @@ impl Settings {
                 .filter_map(|m| Some(Machine { name: m.get("name")?.as_str()?.into(), target: m.get("target")?.as_str()?.into() }))
                 .filter(|m| crate::machines::check(&m.name, &m.target, &[]).is_ok())
                 .collect(),
-            seen_version: v.get("seen_version").and_then(Value::as_str).map(str::to_string),
+            // Settings without it were written by a version from before the notes: an update, not a first install.
+            seen_version: Some(v.get("seen_version").and_then(Value::as_str).unwrap_or_default().to_string()),
         }
     }
 

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 /// A SendMessage call, and what its result said.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sent {
     pub id: String,
     pub ts: u64,
@@ -30,7 +30,7 @@ pub struct Move {
     pub ts: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Transcript {
     offset: u64,
     carry: Vec<u8>,
@@ -172,7 +172,7 @@ fn handle(st: &mut Transcript, line: &str, usage: &mut Usage, now_ms: u64) {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Transcripts {
     pub files: HashMap<PathBuf, Transcript>,
 }

@@ -108,8 +108,11 @@ It shows:
 
 ## Privacy
 
-Everything stays on the machine. The one request that leaves it: now and then, the installed app asks GitHub for
-the latest Asterism release, to offer an update (`ASTERISM_NO_UPDATES=1` turns that off). Other machines you add
+Everything stays on the machine. The requests that leave it: now and then, the installed app asks GitHub for
+the latest Asterism release, to offer an update (`ASTERISM_NO_UPDATES=1` turns that off), and for the notes of the
+version that runs, after an update or when you open What's new. What Asterism read of your history (totals per
+day and model, each session's title and latest move) is kept in `history.json` next to its settings, so the next
+launch reads only what is new: delete it and the history is read again. Other machines you add
 are reached over SSH, and only what their agent reads comes back. It never reads process environments, masks anything in a command line that looks
 like a secret (tokens, keys, passwords, `Authorization` headers, credentials in URLs), shows your home folder as
 `~`, and changes nothing.

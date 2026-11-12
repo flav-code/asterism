@@ -1,4 +1,5 @@
 //! The map and usage on this machine, to compare with other tools: `cargo run --release -p asterism-core --example graph`.
+//! With a file name after it, what was read is restored from that file first and kept in it at the end.
 use asterism_core::{desktop::DesktopStore, graph::Visualizer};
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -9,7 +10,10 @@ fn main() {
     let mut sys = sysinfo::System::new().unwrap();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let live: HashSet<u32> = sys.processes().keys().map(|p| p.as_u32()).collect();
-    let (mut store, mut viz) = (DesktopStore::default(), Visualizer::default());
+    let cache = std::env::args().nth(1).map(std::path::PathBuf::from);
+    let t = Instant::now();
+    let (mut store, mut viz) = (DesktopStore::default(), cache.as_deref().map_or_else(Visualizer::default, Visualizer::restore));
+    println!("restored in {:?}: {} bytes of transcripts known", t.elapsed(), viz.transcripts.read_bytes());
     let now = || SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     let start = Instant::now();
     let mut builds = 0;
@@ -27,6 +31,11 @@ fn main() {
         }
     };
     println!("full scan in {:?} over {builds} builds", start.elapsed());
+    if let Some(cache) = &cache {
+        let t = Instant::now();
+        let kept = viz.save(cache);
+        println!("kept: {kept} in {:?}, {} bytes on disk", t.elapsed(), std::fs::metadata(cache).map_or(0, |m| m.len()));
+    }
     let _ = graph;
     let t = Instant::now();
     let desktop = store.refresh(&home);

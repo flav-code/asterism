@@ -3,6 +3,7 @@
 use asterism_core::Monitor;
 use asterism_core::attribute::{OwnerKind, Report};
 use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -120,7 +121,9 @@ fn serve(args: &[String]) -> ! {
     #[allow(deprecated)] // fixed on every OS since Rust 1.85
     let home = std::env::home_dir().unwrap_or_default();
     let (mut sender, mut last_usage, mut sent) = (Sender::default(), std::ptr::null(), Instant::now() - Duration::from_secs(9));
-    asterism_core::graph::follow(&home, |graph, usage| {
+    // Next to the agent itself: a reconnection reads only what the transcripts gained.
+    let cache = home.join(".cache/asterism/history.json");
+    asterism_core::graph::follow(&home, cache.parent().is_some_and(Path::is_dir).then_some(cache.as_path()), |graph, usage| {
         // While the history is first read, the map changes at every step: once a second is enough.
         if !usage.ready && sent.elapsed() < Duration::from_secs(1) {
             return true;

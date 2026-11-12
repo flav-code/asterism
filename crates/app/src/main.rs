@@ -65,7 +65,14 @@ fn main() {
         .spawn(move || {
             #[allow(deprecated)]
             let home = std::env::home_dir().unwrap_or_default();
-            asterism_core::graph::follow(&home, |graph, usage| gtx.send(Some(machines::merged(graph, usage))).is_ok());
+            // What was read of the history is kept next to the settings: the next launch reads only what is new.
+            // Snapshot builds keep nothing, unless MDB_CACHE names a file.
+            let cache = if cfg!(feature = "snapshot") {
+                std::env::var_os("MDB_CACHE").map(std::path::PathBuf::from)
+            } else {
+                Some(settings::data_dir().join("history.json"))
+            };
+            asterism_core::graph::follow(&home, cache.as_deref(), |graph, usage| gtx.send(Some(machines::merged(graph, usage))).is_ok());
         })
         .expect("the sessions thread");
 
