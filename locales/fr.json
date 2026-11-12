@@ -181,6 +181,8 @@
       "all_time": "Depuis le début",
       "all_time_sub": "%{n} jetons en sortie"
     },
+    "no_price": "pas encore de prix",
+    "no_price_on": "%{models} : pas encore de prix · %{replies}",
     "not_priced": "Sans prix : %{models}.",
     "footer": "Valeur = ce que ces jetons coûteraient sur l'API Anthropic (prix publics du 12 nov. 2026 : entrée, sortie, écritures du cache à 1,25× ou 2×, lectures du cache). Un abonnement n'est pas facturé ainsi ; c'est une mesure du travail effectué.%{unpriced}"
   },

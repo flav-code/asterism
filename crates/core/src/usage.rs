@@ -91,13 +91,16 @@ pub struct Totals {
     /// Replies.
     pub n: u64,
     pub usd: f64,
+    /// Replies of a model with no known price: they are in the tokens above, and count for nothing in `usd`.
+    #[serde(default)]
+    pub np: u64,
 }
 
 impl Totals {
     /// Adds `r` to these totals.
     pub fn add(&mut self, r: &Totals) {
-        (self.i, self.o, self.cr, self.cw, self.n, self.usd) =
-            (self.i + r.i, self.o + r.o, self.cr + r.cr, self.cw + r.cw, self.n + r.n, self.usd + r.usd);
+        (self.i, self.o, self.cr, self.cw, self.n, self.usd, self.np) =
+            (self.i + r.i, self.o + r.o, self.cr + r.cr, self.cw + r.cw, self.n + r.n, self.usd + r.usd, self.np + r.np);
     }
     /// Every token the model processed.
     #[must_use]
@@ -197,6 +200,7 @@ impl Usage {
             cw: n(u, "cache_creation_input_tokens") as u64,
             n: 1,
             usd: usd.unwrap_or(0.0),
+            np: u64::from(usd.is_none()),
         };
         let local = Local.timestamp_millis_opt(ts as i64).single();
         let day = local.map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
@@ -253,6 +257,17 @@ mod tests {
         close(cost("claude-opus-4-1-20250805", &json!({ "output_tokens": 1e6 })), 75.0);
         assert_eq!(cost("gpt-9", &json!({ "output_tokens": 1 })), None);
         assert_eq!(model_id("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn a_model_with_no_price_is_counted_as_such() {
+        let mut u = Usage::default();
+        let mut f = FileTotals::default();
+        let line = json!({ "type": "assistant", "timestamp": "2026-10-30T12:00:00Z",
+            "message": { "id": "msg_2", "model": "claude-next-9", "usage": { "output_tokens": 500 }, "content": [] } });
+        u.add(&mut f, &line, false, 0);
+        let t = u.day.values().next().expect("one day");
+        assert_eq!((t.o, t.usd, t.np, u.unpriced["claude-next-9"]), (500, 0.0, 1, 1));
     }
 
     #[test]

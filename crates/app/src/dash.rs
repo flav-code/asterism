@@ -37,14 +37,14 @@ const HEAT: [u32; 5] = [0x1b3358, 0x24508c, 0x3474c4, 0x6aa2e6, 0xb4d4fa];
 const CHART_H: f32 = 230.0;
 const CELL_H: f32 = 22.0;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Range {
     Today,
     Days(i64),
     All,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Metric {
     Usd,
     Out,
@@ -164,6 +164,9 @@ struct Col {
     label: String,
     long: String,
     fams: [f64; 5],
+    /// Replies of models with no known price, and those models: worth nothing in $, so the column says so.
+    no_price: f64,
+    no_price_models: Vec<String>,
 }
 
 /// What the tab shows for one range and metric, worked out once per data update.
@@ -211,6 +214,16 @@ struct ModelRow {
     usd: f64,
     /// Output tokens.
     output: f64,
+    /// False for a model this version has no price for: its `usd` is 0 and says nothing.
+    priced: bool,
+}
+
+/// The models of these rows that have no known price, by their shown names, each once.
+fn no_price_models<'a>(rows: impl Iterator<Item = &'a DayRow>) -> Vec<String> {
+    let mut names: Vec<String> = rows.filter(|r| r.t.np > 0).map(|r| pretty_model(&r.model)).collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// One hour of one weekday.
@@ -266,12 +279,25 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     let fam_index = |f: &str| FAMS.iter().position(|x| *x == f).unwrap_or(4);
     let cols: Vec<Col> = if range == Range::Today {
         let mut cols: Vec<Col> = (0..=now.hour())
-            .map(|h| Col { key: format!("h{h}"), label: format!("{h:02}h"), long: format!("{h:02}h"), fams: [0.0; 5] })
+            .map(|h| Col {
+                key: format!("h{h}"),
+                label: format!("{h:02}h"),
+                long: format!("{h:02}h"),
+                fams: [0.0; 5],
+                no_price: 0.0,
+                no_price_models: Vec::new(),
+            })
             .collect();
         let prefix = format!("{}T", day_key(today));
+        // An hour knows its families, not its models: the day's models with no price stand for each of its hours.
+        let today_no_price = no_price_models(days.iter().copied());
         for h in u.hours.iter().filter(|h| h.h.starts_with(&prefix)) {
             if let Some(c) = h.h[11..].parse::<usize>().ok().and_then(|hr| cols.get_mut(hr)) {
                 c.fams[fam_index(h.fam)] += metric.of(&h.t);
+                c.no_price += h.t.np as f64;
+                if h.t.np > 0 {
+                    c.no_price_models.clone_from(&today_no_price);
+                }
             }
         }
         cols
@@ -286,13 +312,19 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
                 label: d.format(&i18n::names(&d, "%-d %b")).to_string(),
                 long: d.format(&i18n::names(&d, "%a %-d %b")).to_string(),
                 fams: [0.0; 5],
+                no_price: 0.0,
+                no_price_models: Vec::new(),
             });
             d += chrono::Duration::days(1);
         }
         for r in &days {
             if let Some(&c) = index.get(&r.d) {
                 cols[c].fams[fam_index(r.fam)] += metric.of(&r.t);
+                cols[c].no_price += r.t.np as f64;
             }
+        }
+        for (key, &c) in &index {
+            cols[c].no_price_models = no_price_models(days.iter().copied().filter(|r| r.d == *key));
         }
         cols
     };
@@ -321,12 +353,20 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     let mut by_model: HashMap<&str, ModelRow> = HashMap::new();
     for d in &days {
         let model = d.model.as_str();
-        let row = by_model.entry(model).or_insert_with(|| ModelRow { name: pretty_model(model), fam: d.fam, usd: 0.0, output: 0.0 });
+        let row = by_model.entry(model).or_insert_with(|| ModelRow {
+            name: pretty_model(model),
+            fam: d.fam,
+            usd: 0.0,
+            output: 0.0,
+            priced: true,
+        });
         row.usd += d.t.usd;
         row.output += d.t.o as f64;
+        row.priced &= d.t.np == 0;
     }
     let mut models: Vec<ModelRow> = by_model.into_values().collect();
-    models.sort_by(|a, b| b.usd.total_cmp(&a.usd));
+    // The models with no price first: nothing says how they compare, and they are what needs an update.
+    models.sort_by(|a, b| a.priced.cmp(&b.priced).then(b.usd.total_cmp(&a.usd)).then(b.output.total_cmp(&a.output)));
 
     let mut heat = [[HeatCell::default(); 24]; 7];
     for h in u.hours.iter().filter(|h| h.h.as_str() >= start_key.as_str()) {
@@ -690,23 +730,29 @@ fn span(d: Div, g: f32) -> Div {
 }
 
 /// A row of a list: label, value, and a thin bar with its share.
-fn list_row(label: AnyElement, value: AnyElement, share: f64, color: Rgba, first: bool) -> Div {
+/// A row of a list: its name, its number, and a bar for its share. No line between rows: so close to the bar, a
+/// line read as a relief.
+fn list_row(label: AnyElement, value: AnyElement, share: f64, color: Rgba) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(5.0))
-        .py(px(7.0))
-        .when(!first, |d| d.border_t_1().border_color(line()))
+        .gap(px(6.0))
+        .py(px(8.0))
         .text_size(px(12.0))
         .child(div().flex().items_center().gap(px(12.0)).child(div().flex_1().min_w_0().overflow_hidden().child(label)).child(value))
         .child(
             div()
-                .h(px(4.0))
+                .h(px(6.0))
                 .w_full()
-                .rounded(px(2.0))
+                .rounded_full()
                 .bg(bg())
-                .child(div().h_full().rounded(px(2.0)).w(relative((share.max(0.005)) as f32)).bg(color)),
+                .child(div().h_full().rounded_full().w(relative((share.max(0.005)) as f32)).bg(color)),
         )
+}
+
+/// The mark of replies whose model has no known price: a hollow ring, unlike any family's swatch.
+fn no_price_ring(size: f32) -> Div {
+    div().size(px(size)).flex_none().rounded_full().border_1().border_color(rgb(0xe4e5ee))
 }
 
 fn value(main: String, sub: String) -> AnyElement {
@@ -754,8 +800,11 @@ impl Render for DashView {
             .map(|(i, &v)| a.val(format!("t{i}"), v, 0.0))
             .collect();
         let target_max = d.cols.iter().map(|c| c.fams.iter().sum::<f64>()).fold(0.0, f64::max);
-        let bars_top =
-            a.val("btop".into(), *nice_ticks(target_max, 4.0).last().unwrap_or(&1.0), *nice_ticks(target_max, 4.0).last().unwrap_or(&1.0));
+        // A metric or a range has its own scale and its own bars: switching shows the new scale at once and lets the
+        // bars rise, where sliding from dollars to replies made the axis crawl up for a second.
+        let view = format!("{:?}{:?}", self.metric, self.range);
+        let scale_top = *nice_ticks(target_max, 4.0).last().unwrap_or(&1.0);
+        let bars_top = a.val(format!("btop{view}"), scale_top, scale_top);
         // Where each column sits, as a share of the plot's width: a column that stays when the range changes
         // slides and widens to its new place.
         let (n, inner) = (d.cols.len() as f64, if d.cols.len() > 60 { 0.12 } else { 0.22 });
@@ -770,7 +819,7 @@ impl Render for DashView {
             })
             .collect();
         let bars_now: Vec<[f64; 5]> =
-            d.cols.iter().map(|c| std::array::from_fn(|f| a.val(format!("b{}{f}", c.key), c.fams[f], 0.0))).collect();
+            d.cols.iter().map(|c| std::array::from_fn(|f| a.val(format!("b{:?}{}{f}", self.metric, c.key), c.fams[f], 0.0))).collect();
         let live_max_target = d.live.iter().map(|m| m.output).fold(0.0, f64::max).max(1.0);
         let live_max = a.val("lmax".into(), live_max_target, live_max_target);
         let live_now: Vec<f64> = d.live.iter().map(|m| a.val(format!("m{}", m.at), m.output, 0.0)).collect();
@@ -952,6 +1001,18 @@ impl Render for DashView {
                         }
                         acc += v;
                         first = false;
+                    }
+                    if metric == Metric::Usd && c.no_price > 0.0 {
+                        let r = (bw / 2.0).clamp(2.0, 3.5);
+                        let center = o + point(px(x + bw / 2.0), px((y(acc) - 4.0 - r).max(top + r)));
+                        window.paint_quad(quad(
+                            Bounds::new(center - point(px(r), px(r)), size(px(r * 2.0), px(r * 2.0))),
+                            px(r),
+                            transparent_black(),
+                            px(1.5),
+                            rgb(0xe4e5ee),
+                            BorderStyle::Solid,
+                        ));
                     }
                     let last = i + 1 == d.cols.len();
                     // A date too close to "today" (the last column) would run into it.
@@ -1159,19 +1220,42 @@ impl Render for DashView {
                 .child(div().size(px(10.0)).rounded(px(2.0)).bg(fam_color(f)))
                 .child(fam_label(f))
         }));
+        // In dollars, a model with no price adds nothing to its day's bar: a ring over the day stands for it.
+        let no_price_shown = self.metric == Metric::Usd && d.cols.iter().any(|c| c.no_price > 0.0);
+        let legend = legend.when(no_price_shown, |l| {
+            l.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(px(11.0))
+                    .text_color(muted())
+                    .child(no_price_ring(10.0))
+                    .child(t!("dash.no_price").into_owned()),
+            )
+        });
         let chart_title = if self.range == Range::Today {
             t!("dash.per_hour", metric = self.metric.name())
         } else {
             t!("dash.per_day", metric = self.metric.name())
         };
         let models = d.models.iter().enumerate().map(|(i, m)| {
-            list_row(
-                div().child(m.name.clone()).into_any_element(),
-                value(usd(m.usd), t!("dash.out", n = short(m.output)).into_owned()),
-                model_share[i],
-                fam_color(m.fam),
-                i == 0,
-            )
+            let out = t!("dash.out", n = short(m.output)).into_owned();
+            // A model with no price says so, where "$0.00" would read as free.
+            let worth = if m.priced {
+                value(usd(m.usd), out)
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .flex_none()
+                    .child(no_price_ring(8.0))
+                    .child(div().font_weight(FontWeight::MEDIUM).text_color(amber()).child(t!("dash.no_price").into_owned()))
+                    .child(div().text_size(px(11.0)).text_color(faint()).child(out))
+                    .into_any_element()
+            };
+            list_row(div().child(m.name.clone()).into_any_element(), worth, model_share[i], fam_color(m.fam))
         });
         let sessions = d.sessions.iter().enumerate().map(|(i, s)| {
             let id = s.id.clone();
@@ -1187,16 +1271,10 @@ impl Render for DashView {
                 .into_any_element();
             let out = t!("dash.out", n = short(s.output)).into_owned();
             let sub = if s.agents_usd > 0.0 { format!("{out} · {}", t!("dash.subagents_usd", usd = usd(s.agents_usd))) } else { out };
-            list_row(label, value(usd(s.usd), sub), session_share[i], rgb(0x3987e5), i == 0)
+            list_row(label, value(usd(s.usd), sub), session_share[i], rgb(0x3987e5))
         });
         let tools = u.tools.iter().enumerate().map(|(i, (t, n))| {
-            list_row(
-                div().child(t.clone()).into_any_element(),
-                value(short(*n as f64), String::new()),
-                tool_share[i],
-                rgb(0x3987e5),
-                i == 0,
-            )
+            list_row(div().child(t.clone()).into_any_element(), value(short(*n as f64), String::new()), tool_share[i], rgb(0x3987e5))
         });
         let empty = || div().text_size(px(12.0)).text_color(faint()).child(t!("dash.empty").into_owned());
         let facts = div().flex().gap(px(14.0)).children(d.facts.iter().map(|Fact { label: k, value: v, sub: s }| {
@@ -1285,6 +1363,22 @@ impl Render for DashView {
                                 .child(fam_label(f))
                                 .child(div().text_color(muted()).child(metric.fmt(*v)))
                         }))
+                        .when(c.no_price > 0.0, |card| {
+                            let said = t!(
+                                "dash.no_price_on",
+                                models = c.no_price_models.join(", "),
+                                replies = i18n::count("dash.replies_n", c.no_price as u64)
+                            );
+                            card.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .text_size(px(12.0))
+                                    .child(no_price_ring(8.0))
+                                    .child(div().text_color(amber()).child(said.into_owned())),
+                            )
+                        })
                 }
                 Hover::Minute(i) => {
                     let Minute { at: t, output: o, replies: n, usd: v } = d.live[i];

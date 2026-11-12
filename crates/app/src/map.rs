@@ -1151,7 +1151,11 @@ impl Render for MapView {
 }
 
 fn legend() -> Div {
-    let item = |swatch: Div, label: Cow<str>| div().flex().items_center().gap(px(7.0)).child(swatch).child(label.into_owned());
+    // Every swatch sits in the middle of a slot as wide as the widest, so the texts start on one column.
+    let item = |swatch: Div, label: Cow<str>| {
+        let slot = div().w(px(14.0)).flex_none().flex().justify_center().child(swatch);
+        div().flex().items_center().gap(px(7.0)).child(slot).child(label.into_owned())
+    };
     let ring = |c: Rgba, dashed: bool| div().size(px(10.0)).rounded_full().border_1().border_color(c).when(dashed, |d| d.border_dashed());
     let bar = |c: Rgba| div().w(px(14.0)).h(px(2.0)).bg(c);
     let badge = |icon: IconName| {

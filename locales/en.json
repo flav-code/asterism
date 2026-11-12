@@ -181,6 +181,8 @@
       "all_time": "All time",
       "all_time_sub": "%{n} output tokens"
     },
+    "no_price": "no price yet",
+    "no_price_on": "%{models}: no price yet · %{replies}",
     "not_priced": "Not priced: %{models}.",
     "footer": "Value = what these tokens would cost on the Anthropic API (public prices of 12 Nov 2026: input, output, cache writes at 1.25× or 2×, cache reads). A subscription isn't billed this way; it shows how much work went through.%{unpriced}"
   },
