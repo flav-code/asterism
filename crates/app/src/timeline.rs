@@ -754,23 +754,21 @@ impl Render for TimelineView {
         .h(px(height));
 
         let tip = self.hover.map(|h| {
-            // The card is placed in the tab, whose top left is the axis's.
-            let top_left = point(self.chart.get().origin.x, self.scroll.handle.bounds().top() - px(AXIS));
-            let pos = self.mouse - top_left;
-            match h {
-                Hover::Node(i) => state::node_tip(&g.nodes[i], pos, now),
+            let card = match h {
+                Hover::Node(i) => state::node_tip(&g.nodes[i], now),
                 Hover::Msg(m) => {
                     let msg = &g.messages[m];
                     let title = |id: &str| g.nodes.iter().find(|n| n.id == id).map_or_else(|| id.to_string(), |n| clip(&n.title, 40));
                     let kind = if msg.kind == MsgKind::Report { t!("timeline.tip.report") } else { t!("timeline.tip.message") };
                     let failed = if msg.ok == Some(false) { format!(" · {}", t!("timeline.tip.failed")) } else { String::new() };
                     let what = if msg.summary.is_empty() { &msg.text } else { &msg.summary };
-                    tip_card(pos)
+                    tip_card()
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} → {}", title(&msg.from), title(&msg.to))))
                         .child(div().text_size(px(12.0)).text_color(muted()).child(format!("{kind} · {}{failed}", when(msg.ts))))
                         .child(div().text_size(px(12.0)).child(clip(what, 200)))
                 }
-            }
+            };
+            tip_at(self.mouse, card.text_size(px(13.0)).text_color(text()))
         });
 
         div()
@@ -791,7 +789,7 @@ impl Render for TimelineView {
                     .child(body)
                     .child(self.scroll.driver()),
             )
-            .children(tip.map(|t| t.text_size(px(13.0)).text_color(text())))
+            .children(tip)
             .child(zoom_driver(cx.entity()))
             .on_mouse_down(
                 MouseButton::Left,

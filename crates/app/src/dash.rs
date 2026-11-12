@@ -577,7 +577,6 @@ pub struct DashView {
     metric: Metric,
     cache: Option<(DashKey, Rc<Dash>)>,
     scroll: Glide,
-    root: Rc<Cell<Bounds<Pixels>>>,
     bars: Rc<Cell<Bounds<Pixels>>>,
     live: Rc<Cell<Bounds<Pixels>>>,
     heat: Rc<Cell<Bounds<Pixels>>>,
@@ -628,7 +627,6 @@ impl DashView {
             },
             cache: None,
             scroll: Glide::default(),
-            root: Rc::default(),
             bars: Rc::default(),
             live: Rc::default(),
             heat: Rc::default(),
@@ -813,11 +811,6 @@ fn heat_color(level: f32) -> Rgba {
 /// The short name of a weekday, Monday first, in this language.
 fn weekday(wd: usize) -> String {
     t!("date.days_from_sunday").split(' ').nth((wd + 1) % 7).unwrap_or("").to_string()
-}
-
-/// Captures where an element was laid out, for hit tests.
-fn probe(cell: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
-    canvas(move |b, _, _| cell.set(b), |_, _, _, _| {}).absolute().size_full()
 }
 
 impl Render for DashView {
@@ -1386,12 +1379,11 @@ impl Render for DashView {
             );
 
         let tip = self.hover.map(|h| {
-            let pos = self.mouse - self.root.get().origin;
-            match h {
+            let card = match h {
                 Hover::Col(i) => {
                     let c = &d.cols[i];
                     let total: f64 = c.fams.iter().sum();
-                    tip_card(pos)
+                    tip_card()
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} · {}", c.long, metric.fmt(total))))
                         .children(FAMS.iter().zip(&c.fams).filter(|(_, v)| **v > 0.0).map(|(f, v)| {
                             div()
@@ -1422,7 +1414,7 @@ impl Render for DashView {
                 }
                 Hover::Minute(i) => {
                     let Minute { at: t, output: o, replies: n, usd: v } = d.live[i];
-                    tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(when(t))).child(
+                    tip_card().child(div().font_weight(FontWeight::SEMIBOLD).child(when(t))).child(
                         div().text_size(px(12.0)).text_color(muted()).child(format!(
                             "{} · {} · {}",
                             t!("dash.output_n", n = short(o)),
@@ -1433,7 +1425,7 @@ impl Render for DashView {
                 }
                 Hover::Cell { row, hour: hr } => {
                     let HeatCell { replies: n, usd: v } = d.heat[row].cells[hr];
-                    tip_card(pos).child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", d.heat[row].label))).child(
+                    tip_card().child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{} {hr:02}:00", d.heat[row].label))).child(
                         div().text_size(px(12.0)).text_color(muted()).child(format!(
                             "{} · {}",
                             i18n::count("dash.replies_n", n as u64),
@@ -1441,7 +1433,8 @@ impl Render for DashView {
                         )),
                     )
                 }
-            }
+            };
+            tip_at(self.mouse, card.text_size(px(13.0)).text_color(text()))
         });
         let _ = window;
         let dash = d.clone();
@@ -1450,7 +1443,6 @@ impl Render for DashView {
             .size_full()
             .relative()
             .bg(bg())
-            .child(probe(self.root.clone()))
             .child(
                 div()
                     .id("usage-scroll")
@@ -1460,7 +1452,7 @@ impl Render for DashView {
                     .child(content)
                     .child(self.scroll.driver()),
             )
-            .children(tip.map(|t| t.text_size(px(13.0)).text_color(text())))
+            .children(tip)
             .on_mouse_move(cx.listener(move |v, e: &MouseMoveEvent, _, cx| {
                 v.mouse = e.position;
                 v.hover = v.hit(e.position, &dash);

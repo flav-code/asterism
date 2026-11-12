@@ -1090,7 +1090,7 @@ impl Render for MapView {
         }
 
         let canvas_bounds = self.canvas.clone();
-        let tip = self.hover.map(|b| state::node_tip(&g.nodes[self.node_of[b]], self.mouse - self.canvas.get().origin, now));
+        let tip = self.hover.map(|b| tip_at(self.mouse, state::node_tip(&g.nodes[self.node_of[b]], now)));
 
         // The id stays the English name whatever the language.
         let titles_seg = |id: &'static str, label: String, mode: Titles| {

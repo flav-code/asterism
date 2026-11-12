@@ -143,21 +143,27 @@ pub fn paint_text(
     w
 }
 
-/// The box of a hover card, placed `pos` from its parent's top left.
-pub fn tip_card(pos: Point<Pixels>) -> Div {
+/// The box of a hover card; [`tip_at`] places it.
+pub fn tip_card() -> Div {
     div()
-        .absolute()
-        .left(pos.x + px(14.0))
-        .top(pos.y + px(14.0))
         .max_w(px(340.0))
         .p(px(10.0))
         .rounded(px(10.0))
-        .bg(rgba(0x11121ad0))
+        // Opaque: the card can sit over the side panel's text.
+        .bg(panel())
         .border_1()
         .border_color(line())
         .flex()
         .flex_col()
         .gap(px(2.0))
+}
+
+/// A hover card next to the mouse (a place in the window), drawn over everything else: a card placed in its tab was
+/// squeezed to a few pixels next to the side panel. Where it would leave the window, it goes to the other side of
+/// the mouse.
+pub fn tip_at(mouse: Point<Pixels>, card: Div) -> Deferred {
+    // The padding is the gap between the mouse and the card, whichever side the card ends up on.
+    deferred(anchored().position(mouse).child(div().p(px(14.0)).child(card)))
 }
 
 /// "14:05" today, "6 Nov 14:05" another day.

@@ -203,10 +203,10 @@ pub fn state_of(n: &Node) -> Cow<'static, str> {
 }
 
 /// The hover card of a session or subagent.
-pub fn node_tip(n: &Node, pos: Point<Pixels>, now: u64) -> Div {
+pub fn node_tip(n: &Node, now: u64) -> Div {
     let kind = n.agent_type.as_deref().filter(|_| n.kind == NodeKind::Agent).map(|t| format!("{t} · ")).unwrap_or_default();
     let ago_s = now.saturating_sub(n.last_at) / 1000;
-    tip_card(pos)
+    tip_card()
         .child(div().font_weight(FontWeight::SEMIBOLD).child(clip(&n.title, 70)))
         .child(div().text_size(px(12.0)).text_color(muted()).child(format!(
             "{kind}{} · {} · {}",
