@@ -234,7 +234,7 @@ jobs:
           reaches them with \`ssh\` and copies its agent there itself: \`asterism-agent-$v-linux-*\` (Linux, x64 and arm64).
 
           **Updates:** Asterism checks for new versions on its own. When one is ready, a green arrow shows at the top
-          right of the window: click it to see what the new version brings and restart on it.
+          right of the window: click it and say yes to restart on the new version, which then shows what it brings.
 
           Checksums are in \`SHA256SUMS.txt\`.
           EOF

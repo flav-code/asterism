@@ -62,7 +62,7 @@
     "update": {
       "downloading": "Downloading v%{version}… %{percent}%",
       "ready": "Update ready · v%{version}",
-      "click_to_restart": "Click to see what it brings and restart.",
+      "click_to_restart": "Click to install it and restart.",
       "installs_on_click": "It installs when you click the green arrow."
     },
     "feed": {
@@ -360,7 +360,7 @@
       "up_to_date": "Asterism %{version} is up to date",
       "up_to_date_detail": "It also checks on its own, every 6 hours.",
       "ready": "Asterism %{version} is ready",
-      "ready_detail": "Click the green arrow at the top right of the window to see what it brings and restart on it.",
+      "ready_detail": "Click the green arrow at the top right of the window to install it and restart.",
       "scoop": "Installed with Scoop",
       "scoop_detail": "Scoop updates it: run scoop update asterism.",
       "not_installed": "This copy doesn't update itself",
@@ -371,12 +371,13 @@
     }
   },
   "version": {
-    "ready": "Asterism %{version} is ready",
+    "ready": "Asterism %{version} is available",
+    "confirm": "Install it now? Asterism restarts on the new version, and shows what it brings.",
     "whats_new": "What's new in Asterism %{version}",
     "new": "New",
     "fixed": "Fixed",
-    "restart": "Restart and update",
-    "later": "Later",
+    "restart": "Yes, restart",
+    "later": "Not now",
     "on_github": "See this release on GitHub",
     "whats_new_link": "What's new",
     "loading": "Loading…",

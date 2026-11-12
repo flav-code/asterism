@@ -1209,9 +1209,9 @@ impl Shell {
         self.check_updates(cx);
     }
 
-    /// The window about a version, over the app: the notes of its release, by section, under its name and date.
-    /// For a version to install: Later, or Restart and update. Only a button, ✕ or Esc closes it: a click beside it
-    /// must not make the notes go unread.
+    /// The window about a version, over the app. For a version to install it only asks: not now, or yes and restart.
+    /// For the version that just started it has the notes of its release, by section, under its name and date. Only
+    /// a button, ✕ or Esc closes it: a click beside it must not make it go unread.
     fn version_window(&self, which: &VersionWindow, cx: &mut Context<Self>) -> AnyElement {
         let close = |s: &mut Shell, cx: &mut Context<Shell>| {
             (s.version_window, s.update_failed) = (None, None);
@@ -1220,7 +1220,9 @@ impl Shell {
         let ready = matches!(which, VersionWindow::Ready);
         let notes = match (which, &self.update) {
             (VersionWindow::WhatsNew(notes), _) => notes.clone(),
-            (VersionWindow::Ready, update::State::Ready { notes, .. }) => notes.clone(),
+            (VersionWindow::Ready, update::State::Ready { version, .. }) => {
+                update::Notes { version: version.clone(), ..Default::default() }
+            }
             _ => update::Notes::default(),
         };
         let title = if ready { t!("version.ready", version = notes.version) } else { t!("version.whats_new", version = notes.version) };
@@ -1324,7 +1326,7 @@ impl Shell {
                 }
             }))
             .relative()
-            .w(px(540.0))
+            .w(px(if ready { 440.0 } else { 540.0 }))
             .max_w(relative(0.94))
             .max_h(relative(0.86))
             .flex()
@@ -1374,7 +1376,12 @@ impl Shell {
                     .flex_col()
                     .gap(px(18.0))
                     .children(sections)
-                    .when(notes.sections.is_empty(), |d| {
+                    .when(ready, |d| {
+                        d.child(
+                            div().text_size(px(13.0)).line_height(px(19.0)).text_color(muted()).child(t!("version.confirm").into_owned()),
+                        )
+                    })
+                    .when(!ready && notes.sections.is_empty(), |d| {
                         d.child(div().text_size(px(13.0)).text_color(muted()).child(t!("version.no_notes").into_owned()))
                     }),
             )
@@ -1382,7 +1389,15 @@ impl Shell {
                 div().px(px(26.0)).pt(px(10.0)).text_size(px(12.0)).text_color(red()).child(t!("version.failed", why = why).into_owned())
             }))
             .child(
-                div().px(px(26.0)).py(px(18.0)).flex().items_center().gap(px(12.0)).child(on_github).child(div().flex_1()).child(buttons),
+                div()
+                    .px(px(26.0))
+                    .py(px(18.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .when(!ready, |d| d.child(on_github))
+                    .child(div().flex_1())
+                    .child(buttons),
             )
             .child(
                 div()

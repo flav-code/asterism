@@ -32,8 +32,6 @@ pub enum State {
     Ready {
         version: String,
         file: PathBuf,
-        /// What this version brings, as its release says it.
-        notes: Notes,
     },
 }
 
@@ -256,7 +254,7 @@ fn check(tx: &watch::Sender<State>) -> Result<(), String> {
         tx.send_replace(State::Idle);
         return Err(format!("{name}: the download doesn't match the release"));
     }
-    tx.send_replace(State::Ready { version, file, notes: notes_from(&release) });
+    tx.send_replace(State::Ready { version, file });
     Ok(())
 }
 
