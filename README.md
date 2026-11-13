@@ -90,8 +90,11 @@ It shows:
   memory pressure.
 - **Who uses it:** each agent session with everything it started (containers included), the Docker VM, each app,
   the system.
-- **Each session:** its processes, its builds, its containers, and its current command (the last tool call without
-  a result, linked to the process running it).
+- **Each session:** its current call (the last tool call without a result, linked to the process running it), then
+  its commands, one block each: what the agent said the command was for, the command itself, what it started (the
+  containers of its `docker` command included), since when it runs, and a mark that turns while it works and
+  stands still while it waits. Under them, the containers found by their folder and what else the session keeps
+  open (the agent itself, its tool servers).
 - **Docker:** containers grouped by Compose project and local cluster, flagged when they have no CPU or memory
   limit, and attached to a session when its `docker` command names them or its folder holds their mounts.
 

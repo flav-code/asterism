@@ -463,7 +463,11 @@
     },
     "build": "build",
     "no_limit": "no limit",
-    "in_container": "in %{name}",
+    "commands_n": "COMMANDS · %{n}",
+    "containers_caption": "CONTAINERS · %{n}",
+    "others_n": "ALSO OPEN · %{n}",
+    "waiting": "waiting",
+    "detached": "detached",
     "more_processes": {
       "one": "and %{n} more process",
       "other": "and %{n} more processes"

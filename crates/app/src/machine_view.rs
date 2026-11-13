@@ -6,7 +6,7 @@ use crate::state;
 use crate::ui::*;
 use crate::ui::{blue, green, red}; // over gpui's colors of the same names
 use asterism_core::Report;
-use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, SessionView};
+use asterism_core::attribute::{ContainerView, GroupView, Owner, OwnerKind, ProcRow, SessionView};
 use asterism_core::host::Pressure;
 use asterism_core::i18n;
 use gpui_kit::assets::IconName;
@@ -23,6 +23,22 @@ use tokio::sync::watch;
 
 /// How long a session's details take to grow or shrink.
 const UNFOLD: Duration = Duration::from_millis(220);
+
+/// From this much CPU (percent of one core) a command works; under it, it runs but waits.
+const WORKING_CPU: f32 = 1.0;
+/// How often the marks of what works are redrawn. Each time redraws the window: at 24 a second they cost a tenth of a
+/// core, which is too much for a window that says who uses the machine.
+const LIVE_FPS: f32 = 10.;
+/// The columns every row of a session's details ends with: since when, memory, CPU. With `TREND_W` kept free after
+/// them, the numbers stand right under the card's own.
+const SINCE_W: f32 = 52.;
+const MEM_W: f32 = 64.;
+const CPU_W: f32 = 70.;
+const TREND_W: f32 = 12.;
+/// The height of a row's first line, which a command's mark and numbers share when its text takes two.
+const ROW_H: f32 = 20.;
+/// How far what a command started stands in: under its text, past its mark.
+const UNDER: f32 = 20.;
 
 /// `UNFOLD`, or slower for snapshots (`MDB_UNFOLD_MS`) so frames can be saved mid-way.
 fn unfold() -> Duration {
@@ -404,7 +420,7 @@ impl MachineView {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(dot(if working { amber() } else { green() }))
+                    .child(if working { pulse(dot(amber()), format!("busy-{}", s.id)) } else { dot(green()).into_any_element() })
                     .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(s.title.clone()))
                     .child(chip(s.project.clone(), muted()))
                     .child({
@@ -435,7 +451,7 @@ impl MachineView {
                     }),
             );
         if let Some(a) = &s.activity {
-            let cost = a.mem.map(|m| format!("{} · {}", bytes(m), cpu(a.cpu.unwrap_or(0.0))));
+            let since = (a.since > 0).then(|| now_ms().saturating_sub(a.since) / 1000);
             card = card.child(
                 div()
                     .flex()
@@ -451,10 +467,7 @@ impl MachineView {
                             .child(crate::state::tool_name(&a.tool).into_owned()),
                     )
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(muted()).child(a.detail.clone()))
-                    .children(cost.map(|c| num(c).text_color(amber())))
-                    .when(a.since > 0, |d| {
-                        d.child(div().text_size(px(11.)).text_color(faint()).child(ago(now_ms().saturating_sub(a.since) / 1000)))
-                    }),
+                    .child(figures(since, a.mem.map(|m| (m, a.cpu.unwrap_or(0.0))))),
             );
         }
         let docker_line = s.groups.iter().map(|g| format!("{} {}", g.kind, g.name)).collect::<Vec<_>>().join(", ");
@@ -490,48 +503,27 @@ impl MachineView {
         card
     }
 
+    /// What the session runs, each thing once: its commands (with what each started, containers included), the
+    /// containers found by their folder, then the agent itself and what else it keeps open.
     fn details(&self, s: &SessionView) -> Div {
-        let mut d = div().flex().flex_col().gap(px(4.)).mt(px(6.)).pt(px(8.)).border_t_1().border_color(line());
-        for b in &s.builds {
-            let what = b.container.as_ref().map_or(String::new(), |c| format!("{} · ", t!("view.in_container", name = c)));
-            d = d.child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .child(chip(t!("view.build").into_owned(), amber()))
-                    .child(div().flex_1().min_w_0().truncate().font_family(MONO).text_size(px(12.)).child(format!("{what}{}", b.cmd)))
-                    .child(num(bytes(b.mem)))
-                    .child(num(cpu(b.cpu)).text_color(muted())),
-            );
+        let (blocks, alone) = blocks(s);
+        let build = |pid: u32| s.builds.iter().any(|b| b.pid == Some(pid));
+        let (commands, others): (Vec<&Block>, Vec<&Block>) = blocks.iter().partition(|b| b.is_command());
+        let section = |title: String| caption(title).pt(px(4.));
+        let mut d = div().flex().flex_col().gap(px(4.)).mt(px(6.)).pt(px(6.)).border_t_1().border_color(line());
+        if !commands.is_empty() {
+            d = d
+                .child(section(t!("view.commands_n", n = commands.len()).into_owned()))
+                .children(commands.iter().map(|b| command(b, &build)));
         }
-        for g in &s.groups {
-            d = d.child(group(g));
+        if !alone.is_empty() {
+            let n: usize = alone.iter().map(|g| g.containers.len()).sum();
+            d = d
+                .child(section(t!("view.containers_caption", n = n).into_owned()))
+                .children(alone.iter().flat_map(|g| group_rows(g, 0., Some(why(g)))));
         }
-        for p in &s.procs {
-            d = d.child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .pl(px(12. * p.depth.min(8) as f32))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(MONO)
-                            .text_size(px(12.))
-                            .text_color(if p.heavy {
-                                amber()
-                            } else if p.detached {
-                                violet()
-                            } else {
-                                muted()
-                            })
-                            .child(p.cmd.clone()),
-                    )
-                    .child(num(bytes(p.mem)).w(px(64.)).flex().justify_end())
-                    .child(num(cpu(p.cpu)).w(px(56.)).flex().justify_end().text_color(muted())),
-            );
+        if !others.is_empty() {
+            d = d.child(section(t!("view.others_n", n = others.len()).into_owned())).children(others.iter().map(|b| other(b, &build)));
         }
         if s.more > 0 {
             d = d.child(div().text_size(px(11.)).text_color(faint()).child(i18n::count("view.more_processes", s.more as u64)));
@@ -563,11 +555,8 @@ impl MachineView {
             .children(none)
             .children(sessions.into_iter().map(|s| self.session(s, cx)))
             .when(!unattached.is_empty(), |d| {
-                d.child(div().pt(px(12.)).child(caption(t!("view.unattached").into_owned()))).children(
-                    unattached
-                        .into_iter()
-                        .map(|g| div().p(px(12.)).rounded(px(10.)).bg(panel()).border_1().border_color(line()).child(group(g))),
-                )
+                d.child(div().pt(px(12.)).child(caption(t!("view.unattached").into_owned())))
+                    .children(unattached.into_iter().map(|g| unattached_card().children(group_rows(g, 0., Some(why(g))))))
             })
             .child(self.sessions_scroll.driver());
         div().flex().flex_col().flex_1().min_w_0().h_full().pr(px(16.)).child(head).child(list)
@@ -577,7 +566,7 @@ impl MachineView {
 #[cfg(feature = "snapshot")]
 impl MachineView {
     /// `MDB_SNAPSHOT=<file.png>`: once the first report is drawn, save the frame and quit.
-    /// `MDB_SNAPSHOT_OPEN=1` opens the biggest session first.
+    /// `MDB_SNAPSHOT_OPEN=1` opens the biggest session first, `MDB_SNAPSHOT_OPEN=all` every session.
     /// `MDB_SNAPSHOT_FRAMES=<folder>`: click the biggest session open and save frames while it unfolds.
     fn snapshot(&mut self, r: &Report, window: &mut Window, cx: &mut Context<Self>) {
         if self.snapshot_taken {
@@ -592,11 +581,11 @@ impl MachineView {
             return;
         }
         let Ok(path) = std::env::var("MDB_SNAPSHOT") else { return };
-        if std::env::var("MDB_SNAPSHOT_OPEN").is_ok()
+        if let Ok(which) = std::env::var("MDB_SNAPSHOT_OPEN")
             && self.expanded.is_empty()
-            && let Some(s) = r.sessions.first()
+            && !r.sessions.is_empty()
         {
-            self.expanded.insert(s.id.clone());
+            self.expanded.extend(r.sessions.iter().take(if which == "all" { usize::MAX } else { 1 }).map(|s| s.id.clone()));
             window.refresh();
             return;
         }
@@ -660,38 +649,213 @@ fn group_matches(g: &GroupView, q: &str) -> bool {
     has(&g.name) || has(&g.kind) || g.containers.iter().any(|c| has(&c.name))
 }
 
-/// About how tall a session's details are, so the unfolding animation grows at the right pace.
-fn details_height(s: &SessionView) -> f32 {
-    let rows = s.builds.len() + s.procs.len() + s.groups.iter().map(|g| g.containers.len() + 1).sum::<usize>() + usize::from(s.more > 0);
-    18.0 + rows as f32 * 22.0
+/// A card for containers no session owns.
+fn unattached_card() -> Div {
+    div().flex().flex_col().gap(px(4.)).p(px(12.)).rounded(px(10.)).bg(panel()).border_1().border_color(line())
 }
 
-fn group(g: &GroupView) -> Div {
-    let why = match (g.why, g.shared) {
-        (Some("client"), _) => t!("view.why.client").into_owned(),
-        (Some(_), _) => g.dir.as_ref().map_or(t!("view.why.folder"), |d| t!("view.why.mounts", dir = d)).into_owned(),
-        (None, n) if n > 0 => i18n::count("view.why.shared", n as u64),
-        _ => t!("view.why.none").into_owned(),
+/// One thing a session started and everything under it: the agent itself, a command it runs, a server it keeps open.
+struct Block<'s> {
+    root: &'s ProcRow,
+    under: Vec<&'s ProcRow>,
+    /// The containers one of its docker commands started.
+    groups: Vec<&'s GroupView>,
+}
+
+impl Block<'_> {
+    /// A Bash call of the agent: core shows those as "$ <command>".
+    fn is_command(&self) -> bool {
+        self.root.cmd.starts_with("$ ")
+    }
+
+    /// What it uses now, CPU then memory, with what it started and its containers.
+    fn load(&self) -> (f32, u64) {
+        self.groups.iter().fold((self.root.tree_cpu, self.root.tree_mem), |(cpu, mem), g| (cpu + g.cpu, mem + g.mem))
+    }
+}
+
+/// A session's processes as blocks, in the order they come (the agent first), then the containers no docker command
+/// of a block started.
+fn blocks(s: &SessionView) -> (Vec<Block<'_>>, Vec<&GroupView>) {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut detached = false;
+    for p in &s.procs {
+        if p.depth == 0 {
+            detached = p.detached;
+        }
+        // The agent, each process it started and each detached one open a block; what those started goes under them.
+        match blocks.last_mut() {
+            Some(b) if p.depth > 1 || (p.depth == 1 && detached) => b.under.push(p),
+            _ => blocks.push(Block { root: p, under: Vec::new(), groups: Vec::new() }),
+        }
+    }
+    let mut alone = Vec::new();
+    for g in &s.groups {
+        let runs = |b: &&mut Block| g.client.is_some_and(|pid| b.root.pid == pid || b.under.iter().any(|p| p.pid == pid));
+        match blocks.iter_mut().find(runs) {
+            Some(b) => b.groups.push(g),
+            None => alone.push(g),
+        }
+    }
+    (blocks, alone)
+}
+
+/// About how tall a session's details are, so the unfolding animation grows at the right pace.
+fn details_height(s: &SessionView) -> f32 {
+    let (blocks, alone) = blocks(s);
+    let of_group = |g: &&GroupView| g.containers.len() + usize::from(g.containers.len() > 1);
+    let of_block = |b: &Block| if b.is_command() { 2 + b.under.len() } else { 1 } + b.groups.iter().map(of_group).sum::<usize>();
+    let rows = blocks.iter().map(of_block).sum::<usize>() + alone.iter().map(of_group).sum::<usize>() + 3 + usize::from(s.more > 0);
+    18.0 + rows as f32 * 24.0
+}
+
+/// What a row of a session's details ends with, each in its column: since when (seconds), then memory and CPU.
+fn figures(since: Option<u64>, load: Option<(u64, f32)>) -> Div {
+    let cell = |w: f32| div().w(px(w)).flex_none().flex().justify_end();
+    let (mem, cpu_now) = load.unzip();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(ROW_H))
+        .pr(px(TREND_W))
+        .child(cell(SINCE_W).text_size(px(11.)).text_color(faint()).children(since.map(ago)))
+        .child(cell(MEM_W).children(mem.map(|m| num(bytes(m)))))
+        .child(cell(CPU_W).children(cpu_now.map(|c| num(cpu(c)).text_color(muted()))))
+}
+
+/// A command on one line: a script typed over several lines would take them all.
+fn one_line(cmd: &str) -> String {
+    cmd.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One line of a command, in the fixed-width font, cut with "…" where the row ends.
+fn command_line(cmd: &str, color: Rgba) -> Div {
+    div().flex_1().min_w_0().truncate().font_family(MONO).text_size(px(12.)).text_color(color).child(one_line(cmd))
+}
+
+fn build_chip() -> Div {
+    chip(t!("view.build").into_owned(), amber())
+}
+
+/// Breathes: what it marks is at work. With reduced motion it stands still, which GPUI sees to.
+fn pulse(mark: Div, key: String) -> AnyElement {
+    let breath =
+        Animation::new(Duration::from_millis(1600)).repeat_synced().with_max_fps(LIVE_FPS).with_easing(pulsating_between(0.35, 1.0));
+    mark.with_animation(SharedString::from(key), breath, |el, t| el.opacity(t)).into_any_element()
+}
+
+/// A command the agent runs: its own line (two when it is long), what it started under it, and one bar down its
+/// left side. It turns and is amber while it works, and stands grey while it waits.
+fn command(b: &Block, build: &dyn Fn(u32) -> bool) -> Div {
+    let (cpu_all, mem_all) = b.load();
+    let working = cpu_all >= WORKING_CPU;
+    let mark = if working {
+        let turn = Animation::new(Duration::from_millis(1000)).repeat_synced().with_max_fps(LIVE_FPS);
+        icons::line(IconName::LoaderCircle, amber(), 12.)
+            .with_animation(SharedString::from(format!("turn-{}", b.root.pid)), turn, |icon, t| {
+                icon.with_transformation(Transformation::rotate(percentage(t)))
+            })
+            .into_any_element()
+    } else {
+        div().size(px(8.)).rounded_full().border_1().border_color(faint()).into_any_element()
+    };
+    let typed = one_line(b.root.cmd.strip_prefix("$ ").unwrap_or(&b.root.cmd));
+    // Named by what the agent said it was for, the command itself under it; else by the command, on two lines if long.
+    let title = match &b.root.what {
+        Some(what) => div().truncate().text_size(px(13.)).child(what.clone()),
+        None => div().line_clamp(2).text_ellipsis().font_family(MONO).text_size(px(12.)).child(typed.clone()),
+    };
+    let head = div()
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .child(div().flex_none().w(px(12.)).h(px(ROW_H)).flex().items_center().justify_center().child(mark))
+        .child(title.flex_1().min_w_0().line_height(px(ROW_H)).text_color(text()))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.))
+                .h(px(ROW_H))
+                .when(build(b.root.pid), |d| d.child(build_chip()))
+                .when(!working, |d| d.child(chip(t!("view.waiting").into_owned(), muted()))),
+        )
+        .child(figures(Some(b.root.age), Some((mem_all, cpu_all))));
+    let under = |cmd: &str, depth: usize| {
+        div().flex().items_center().gap(px(8.)).pl(px(UNDER + 12. * depth as f32)).child(command_line(cmd, muted()))
     };
     div()
         .flex()
         .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(chip(g.kind.clone(), cyan()))
-                .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(g.name.clone()))
-                .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(faint()).child(why))
-                .child(num(bytes(g.mem)).w(px(64.)).flex().justify_end())
-                .child(num(cpu(g.cpu)).w(px(56.)).flex().justify_end().text_color(muted())),
-        )
-        .children(g.containers.iter().map(container))
+        .gap(px(2.))
+        .pl(px(8.))
+        .py(px(4.))
+        .border_l_2()
+        .border_color(if working { amber() } else { grey() })
+        .bg(rgba(0xffffff06))
+        .child(head)
+        .children(b.root.what.is_some().then(|| under(&typed, 0).child(figures(None, None))))
+        // The shell a command opens for its parentheses repeats it word for word, and so does the program of a
+        // command that is only that: their cost is in the total, and saying them twice is noise.
+        .children(b.under.iter().filter(|p| p.cmd != b.root.cmd && one_line(&p.cmd) != typed).map(|p| {
+            under(&p.cmd, p.depth.saturating_sub(2).min(8))
+                .when(build(p.pid), |d| d.child(build_chip()))
+                .child(figures(None, Some((p.mem, p.cpu))))
+        }))
+        .children(b.groups.iter().flat_map(|g| group_rows(g, UNDER, None)))
 }
 
-fn container(c: &ContainerView) -> Div {
+/// Anything else the session keeps open, on one line: the agent itself (its own use), a tool server or a detached
+/// process (with all it started, which is not listed).
+fn other(b: &Block, build: &dyn Fn(u32) -> bool) -> Div {
+    let p = b.root;
+    let agent = p.depth == 0 && !p.detached;
+    let load = if agent { (p.mem, p.cpu) } else { (p.tree_mem, p.tree_cpu) };
+    let builds = build(p.pid) || b.under.iter().any(|u| build(u.pid));
+    let row = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(command_line(&p.cmd, muted()))
+        .when(p.detached, |d| d.child(chip(t!("view.detached").into_owned(), violet())))
+        .when(builds, |d| d.child(build_chip()))
+        .child(figures(Some(p.age), Some(load)));
+    div().flex().flex_col().gap(px(2.)).child(row).children(b.groups.iter().flat_map(|g| group_rows(g, 12., None)))
+}
+
+/// How a group of containers was attached to its session, or why it was not.
+fn why(g: &GroupView) -> String {
+    match (g.why, g.shared) {
+        (Some("client"), _) => t!("view.why.client").into_owned(),
+        (Some(_), _) => g.dir.as_ref().map_or(t!("view.why.folder"), |d| t!("view.why.mounts", dir = d)).into_owned(),
+        (None, n) if n > 0 => i18n::count("view.why.shared", n as u64),
+        _ => t!("view.why.none").into_owned(),
+    }
+}
+
+/// A group of containers as rows, `indent` in: a container alone is one row; a cluster or a Compose project is its
+/// own row, then one per container. `why` is said where nothing else shows what the group belongs to.
+fn group_rows(g: &GroupView, indent: f32, why: Option<String>) -> Vec<Div> {
+    if let [only] = &g.containers[..]
+        && only.name == g.name
+    {
+        return vec![container(only, indent, why)];
+    }
+    let head = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .pl(px(indent))
+        .child(chip(g.kind.clone(), cyan()))
+        .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(g.name.clone()))
+        .child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(faint()).child(why.unwrap_or_default()))
+        .child(figures(None, Some((g.mem, g.cpu))));
+    std::iter::once(head).chain(g.containers.iter().map(|c| container(c, indent + 12., None))).collect()
+}
+
+fn container(c: &ContainerView, indent: f32, why: Option<String>) -> Div {
     let limits = if c.unlimited {
         chip(t!("view.no_limit").into_owned(), red())
     } else {
@@ -705,21 +869,14 @@ fn container(c: &ContainerView) -> Div {
         .flex()
         .items_center()
         .gap(px(8.))
-        .pl(px(12.))
-        .child(div().flex_none().w(px(170.)).truncate().font_family(MONO).text_size(px(12.)).child(c.name.clone()))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .font_family(MONO)
-                .text_size(px(12.))
-                .text_color(if c.heavy { amber() } else { muted() })
-                .child(c.cmd.clone()),
-        )
+        .pl(px(indent))
+        .child(icons::line(IconName::Container, cyan(), 12.))
+        .child(div().flex_none().max_w(px(170.)).truncate().font_family(MONO).text_size(px(12.)).child(c.name.clone()))
+        .child(command_line(&c.cmd, muted()))
+        .children(why.map(|w| div().flex_none().max_w(px(200.)).truncate().text_size(px(11.)).text_color(faint()).child(w)))
+        .when(c.heavy, |d| d.child(build_chip()))
         .child(limits)
-        .child(num(bytes(c.mem)).w(px(64.)).flex().justify_end())
-        .child(num(cpu(c.cpu)).w(px(56.)).flex().justify_end().text_color(muted()))
+        .child(figures((c.age > 0).then_some(c.age), Some((c.mem, c.cpu))))
 }
 
 impl Render for MachineView {
@@ -821,4 +978,78 @@ fn metric(icon: IconName, value: String, t: Trend, key: &str, at: u64) -> Div {
         .child(icons::line(icon, faint(), 11.))
         .child(num(value).text_color(if icon == IconName::Cpu { muted() } else { text() }))
         .child(trend_mark(t, &key, at))
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's `test` attribute would take the place of `#[test]`.
+    use super::blocks;
+    use asterism_core::attribute::{GroupView, ProcRow, SessionView};
+
+    fn row(pid: u32, depth: usize, cmd: &str, detached: bool) -> ProcRow {
+        ProcRow { pid, depth, cpu: 0., mem: 0, tree_cpu: 0., tree_mem: 0, age: 0, heavy: false, detached, cmd: cmd.into(), what: None }
+    }
+
+    fn group(name: &str, client: Option<u32>) -> GroupView {
+        GroupView {
+            kind: "Container".into(),
+            name: name.into(),
+            why: None,
+            dir: None,
+            shared: 0,
+            client,
+            cpu: 0.,
+            mem: 0,
+            containers: vec![],
+        }
+    }
+
+    #[test]
+    fn a_session_is_cut_into_what_it_started() {
+        let s = SessionView {
+            id: "s".into(),
+            title: String::new(),
+            project: String::new(),
+            kind: String::new(),
+            status: None,
+            pid: 1,
+            cpu: 0.,
+            mem: 0,
+            docker_cpu: 0.,
+            docker_mem: 0,
+            activity: None,
+            builds: vec![],
+            procs: vec![
+                row(1, 0, "claude", false),
+                row(2, 1, "$ ./test.sh", false),
+                row(3, 2, "bash ./test.sh", false),
+                row(4, 3, "docker run img", false),
+                row(5, 1, "npm exec some-server", false),
+                row(6, 2, "node some-server", false),
+                row(7, 0, "node dev-server.js", true),
+                row(8, 1, "esbuild --service", false),
+            ],
+            more: 0,
+            groups: vec![group("by-command", Some(4)), group("by-folder", None), group("command-not-listed", Some(99))],
+        };
+        let (blocks, alone) = blocks(&s);
+        let got: Vec<(u32, Vec<u32>, Vec<&str>, bool)> = blocks
+            .iter()
+            .map(|b| {
+                (b.root.pid, b.under.iter().map(|p| p.pid).collect(), b.groups.iter().map(|g| g.name.as_str()).collect(), b.is_command())
+            })
+            .collect();
+        // the agent alone; its Bash call with all it started and the container of its docker command; a tool server;
+        // a detached process, whose own children are not new blocks
+        assert_eq!(
+            got,
+            [
+                (1, vec![], vec![], false),
+                (2, vec![3, 4], vec!["by-command"], true),
+                (5, vec![6], vec![], false),
+                (7, vec![8], vec![], false)
+            ]
+        );
+        assert_eq!(alone.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["by-folder", "command-not-listed"]);
+    }
 }

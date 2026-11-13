@@ -16,7 +16,7 @@ pub use attribute::{Inputs, Report, attribute};
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +29,7 @@ pub struct Monitor {
     desktop: desktop::DesktopStore,
     home: PathBuf,
     /// Transcript → (its size when read, what it showed): a transcript is read again only when it grows.
-    activities: HashMap<PathBuf, (u64, Option<sessions::Activity>)>,
+    tails: HashMap<PathBuf, (u64, sessions::Tail)>,
 }
 
 impl Default for Monitor {
@@ -42,7 +42,7 @@ impl Default for Monitor {
             sessions: Default::default(),
             desktop: Default::default(),
             home,
-            activities: HashMap::new(),
+            tails: HashMap::new(),
         }
     }
 }
@@ -57,24 +57,44 @@ impl Monitor {
         let desktop = self.desktop.refresh(&self.home);
         let sessions = self.sessions.read(&self.home, &desktop, at);
 
-        let mut activities = HashMap::new();
+        // The Bash calls running now, as typed: what they said they were for outlives its place in the transcript.
+        let running: HashSet<String> =
+            procs.iter().filter_map(|p| text::readable(&p.cmd).strip_prefix("$ ").map(|c| c.trim().to_string())).collect();
+        let (mut activities, mut said) = (HashMap::new(), HashMap::new());
         let mut cache = HashMap::new();
         for s in sessions.iter().filter(|s| s.pid.is_some()) {
             let Some(t) = &s.transcript else { continue };
             let len = std::fs::metadata(t).map_or(0, |m| m.len());
-            let a = match self.activities.remove(t) {
-                Some((l, a)) if l == len => a,
-                _ => sessions::current_activity(t),
+            let tail = match self.tails.remove(t) {
+                Some((l, tail)) if l == len => tail,
+                before => {
+                    let mut tail = sessions::tail(t);
+                    if let Some((_, before)) = before {
+                        tail.keep_running(before, &running);
+                    }
+                    tail
+                }
             };
-            if let Some(a) = &a {
+            if let Some(a) = &tail.now {
                 activities.insert(s.id.clone(), a.clone());
             }
-            cache.insert(t.clone(), (len, a));
+            said.insert(s.id.clone(), tail.said.clone());
+            cache.insert(t.clone(), (len, tail));
         }
-        self.activities = cache;
+        self.tails = cache;
 
         let (info, containers) = docker.map(|d| (d.info, d.containers)).unwrap_or_default();
         let home = self.home.to_string_lossy();
-        attribute(Inputs { at, host, procs: &procs, sessions: &sessions, activities: &activities, containers, docker: info, home: &home })
+        attribute(Inputs {
+            at,
+            host,
+            procs: &procs,
+            sessions: &sessions,
+            activities: &activities,
+            said: &said,
+            containers,
+            docker: info,
+            home: &home,
+        })
     }
 }

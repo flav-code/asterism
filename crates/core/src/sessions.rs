@@ -3,7 +3,7 @@
 use crate::desktop::DesktopSession;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -146,9 +146,35 @@ fn meta(d: Option<&DesktopSession>, r: Option<&Value>) -> SessionMeta {
     }
 }
 
-/// The latest tool call without a result, from the end of a transcript (one JSON event per line).
+/// What the end of a transcript tells about now.
+#[derive(Clone, Debug, Default)]
+pub struct Tail {
+    /// The latest tool call without a result.
+    pub now: Option<Activity>,
+    /// What each Bash call said it was for: its command → its description. A command sent to the background has
+    /// its result at once and runs on, so this is the only place that says what it is.
+    pub said: HashMap<String, String>,
+}
+
+impl Tail {
+    /// Takes from the reading before what the commands still running said: the transcript has moved on past their
+    /// calls (one picture is bigger than all this reads), and nothing else says what they are.
+    pub fn keep_running(&mut self, before: Tail, running: &HashSet<String>) {
+        for (command, what) in before.said {
+            if running.contains(&command) {
+                self.said.entry(command).or_insert(what);
+            }
+        }
+    }
+}
+
+/// The end of a transcript (one JSON event per line).
 #[must_use]
-pub fn current_activity(transcript: &Path) -> Option<Activity> {
+pub fn tail(transcript: &Path) -> Tail {
+    read_tail(transcript).unwrap_or_default()
+}
+
+fn read_tail(transcript: &Path) -> Option<Tail> {
     const TAIL: u64 = 512 * 1024;
     let mut f = fs::File::open(transcript).ok()?;
     let len = f.metadata().ok()?.len();
@@ -158,12 +184,13 @@ pub fn current_activity(transcript: &Path) -> Option<Activity> {
     let text = String::from_utf8_lossy(&buf);
     // The first line is cut when the tail starts mid-file.
     let lines = text.lines().skip(usize::from(len > TAIL));
-    activity_in(lines)
+    Some(tail_in(lines))
 }
 
 /// Same, over transcript lines.
-pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity> {
+pub fn tail_in<'a>(lines: impl Iterator<Item = &'a str>) -> Tail {
     let mut pending: Vec<(String, Activity)> = Vec::new();
+    let mut said = HashMap::new();
     for line in lines {
         let calls = line.contains("\"tool_use\"");
         if !calls && !line.contains("\"tool_result\"") {
@@ -185,6 +212,9 @@ pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity>
                         .unwrap_or_default();
                     let tool = name.rsplit("__").next().unwrap_or(&name).to_string();
                     let command = (tool == "Bash").then(|| str_of(&input, "command")).flatten();
+                    if let (Some(c), Some(_)) = (&command, str_of(&input, "description")) {
+                        said.insert(c.trim().to_string(), detail.clone());
+                    }
                     pending.push((id, Activity { tool, detail, command, since }));
                 }
                 Some("tool_result") if kind == Some("user") => {
@@ -196,7 +226,7 @@ pub fn activity_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Activity>
             }
         }
     }
-    pending.pop().map(|(_, a)| a)
+    Tail { now: pending.pop().map(|(_, a)| a), said }
 }
 
 /// "2026-11-07T20:15:03.123Z" → ms since the epoch (UTC only, which is what transcripts hold).
@@ -235,15 +265,25 @@ mod tests {
             r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
             r#"{"type":"assistant","timestamp":"2026-11-07T20:00:05Z","message":{"content":[{"type":"text","text":"running tests"},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"npx vitest run","description":"Run the tests"}}]}}"#,
         ];
-        let a = activity_in(lines.into_iter()).unwrap();
+        let tail = tail_in(lines.into_iter());
+        // a call that ended keeps what it said it was for: its command may still run in the background
+        assert_eq!(tail.said.get("npx vitest run").map(String::as_str), Some("Run the tests"));
+        // read again once the transcript has moved on: only a command still running keeps what it said
+        let mut later = tail_in(lines[..2].iter().copied());
+        later.keep_running(tail.clone(), &HashSet::from(["npx vitest run".to_string()]));
+        assert_eq!(later.said.len(), 1);
+        later = tail_in(lines[..2].iter().copied());
+        later.keep_running(tail.clone(), &HashSet::new());
+        assert!(later.said.is_empty());
+        let a = tail.now.unwrap();
         assert_eq!((a.tool.as_str(), a.detail.as_str(), a.command.as_deref()), ("Bash", "Run the tests", Some("npx vitest run")));
         assert_eq!(a.since, iso_ms("2026-11-07T20:00:05Z").unwrap());
-        assert!(activity_in(lines[..2].iter().copied()).is_none());
+        assert!(tail_in(lines[..2].iter().copied()).now.is_none());
         // a copy of an ended call in another kind of line (no timestamp) is not a new call
         let copy = r#"{"type":"api-request-blob","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#;
-        assert!(activity_in([lines[0], lines[1], copy].into_iter()).is_none());
+        assert!(tail_in([lines[0], lines[1], copy].into_iter()).now.is_none());
         let mcp = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"mcp__browser__navigate","input":{"url":"https://example.com"}}]}}"#;
-        assert_eq!(activity_in([mcp].into_iter()).unwrap().tool, "navigate");
+        assert_eq!(tail_in([mcp].into_iter()).now.unwrap().tool, "navigate");
     }
 
     #[test]

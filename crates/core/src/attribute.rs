@@ -35,6 +35,8 @@ pub struct Inputs<'sample> {
     pub sessions: &'sample [SessionMeta],
     /// Session id → what it is running.
     pub activities: &'sample HashMap<String, Activity>,
+    /// Session id → what each of its Bash calls said it was for, by command.
+    pub said: &'sample HashMap<String, HashMap<String, String>>,
     pub containers: Vec<Container>,
     pub docker: Option<DockerInfo>,
     /// The home folder: shown as `~`, and never a folder that claims containers.
@@ -154,12 +156,18 @@ pub struct ProcRow {
     pub depth: usize,
     pub cpu: f32,
     pub mem: u64,
+    /// With everything it started.
+    pub tree_cpu: f32,
+    pub tree_mem: u64,
     pub age: u64,
     pub heavy: bool,
     /// Started by the session but detached from it, found by its folder.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub detached: bool,
     pub cmd: String,
+    /// What the agent said this command was for, when it is one of its Bash calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub what: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +180,9 @@ pub struct GroupView {
     pub dir: Option<String>,
     /// How many sessions tie for it, when it stays unattached because of that.
     pub shared: usize,
+    /// The process of the docker command that started it, when it was attached by one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<u32>,
     pub cpu: f32,
     pub mem: u64,
     pub containers: Vec<ContainerView>,
@@ -202,8 +213,16 @@ pub struct Group {
     pub why: Option<&'static str>,
     pub dir: Option<String>,
     pub shared: usize,
-    /// The docker command that names it, when attached by one.
-    pub client: Option<String>,
+    /// The process of the docker command that names it, when attached by one.
+    pub client: Option<u32>,
+}
+
+/// A docker command a session runs.
+pub struct Client {
+    pub pid: u32,
+    /// Start time, in seconds since the epoch.
+    pub start: u64,
+    pub cmd: String,
 }
 
 /// What a session can claim containers by: the folders it works in, the ones it only went through,
@@ -212,7 +231,7 @@ pub struct Group {
 pub struct Claim {
     pub dirs: Vec<String>,
     pub visited: Vec<String>,
-    pub clients: Vec<String>,
+    pub clients: Vec<Client>,
 }
 
 /// One spelling per folder: forward slashes, no trailing slash, Docker Desktop's host prefixes removed.
@@ -290,10 +309,12 @@ pub fn attach(groups: &mut [Group], claims: &[Claim]) {
                 .any(|t| !t.is_empty() && (names.contains(t) || (hex(t) && ids.iter().any(|id| id.starts_with(t)))))
         };
         let by_client: Vec<usize> =
-            claims.iter().enumerate().filter(|(_, c)| c.clients.iter().any(|cmd| named(cmd))).map(|(i, _)| i).collect();
+            claims.iter().enumerate().filter(|(_, c)| c.clients.iter().any(|c| named(&c.cmd))).map(|(i, _)| i).collect();
         if let [only] = by_client[..] {
             (g.owner, g.why) = (Some(only), Some("client"));
-            g.client = claims[only].clients.iter().find(|cmd| named(cmd)).cloned();
+            // Two commands can mount the same folder: the one that started it began just before its first container.
+            let born = g.containers.iter().map(|c| c.started).filter(|s| *s > 0).min().unwrap_or(0);
+            g.client = claims[only].clients.iter().filter(|c| named(&c.cmd)).min_by_key(|c| c.start.abs_diff(born)).map(|c| c.pid);
             continue;
         }
         let (mut best, mut dir, mut owners) = (0, String::new(), Vec::new());
@@ -534,16 +555,20 @@ pub fn attribute(inp: Inputs) -> Report {
         depth,
         cpu: p.cpu,
         mem: p.mem,
+        tree_cpu: subtree(p.pid).cpu,
+        tree_mem: subtree(p.pid).mem,
         age: now_s.saturating_sub(p.start),
         heavy,
         detached,
         cmd: text::short_program(&text::redact(&text::readable(&p.cmd), inp.home, CMD_MAX)),
+        what: None,
     };
     let mut views: Vec<SessionView> = Vec::new();
     // Per session: the docker commands under the process running its current call, whose containers it also costs.
-    let mut activity_clients: Vec<Vec<String>> = Vec::new();
+    let mut activity_clients: Vec<Vec<u32>> = Vec::new();
     for (li, (root, m)) in lives.iter().enumerate() {
         let (mut rows, mut builds, mut clients) = (Vec::new(), Vec::new(), Vec::new());
+        let said = m.and_then(|i| inp.said.get(&inp.sessions[i].id));
         let starts: Vec<(u32, bool)> =
             std::iter::once((root.pid, false)).chain(detached.get(&li).into_iter().flatten().map(|p| (*p, true))).collect();
         let (mut cpu, mut mem) = (0.0, 0);
@@ -569,9 +594,11 @@ pub fn attribute(inp: Inputs) -> Report {
                     });
                 }
                 if depth > 0 && text::is_docker_cli(&p.cmd) {
-                    clients.push(p.cmd.clone());
+                    clients.push(Client { pid: p.pid, start: p.start, cmd: p.cmd.clone() });
                 }
-                rows.push(row(p, depth, is_detached && depth == 0, heavy));
+                let call = text::readable(&p.cmd);
+                let what = said.and_then(|s| s.get(call.strip_prefix("$ ")?.trim())).map(|d| text::redact(d, inp.home, 200));
+                rows.push(ProcRow { what, ..row(p, depth, is_detached && depth == 0, heavy) });
                 let mut children: Vec<&Proc> = kids.get(&pid).cloned().unwrap_or_default();
                 children.sort_by(|a, b| subtree(a.pid).cpu.total_cmp(&subtree(b.pid).cpu));
                 stack.extend(children.into_iter().map(|k| (k.pid, depth + 1, in_build || heavy)));
@@ -588,7 +615,7 @@ pub fn attribute(inp: Inputs) -> Report {
             let sums = runner.map(|r| subtree(r.pid));
             let mut stack: Vec<u32> = runner.map(|r| r.pid).into_iter().collect();
             while let Some(q) = stack.pop() {
-                clients_now.extend(by_pid.get(&q).filter(|p| text::is_docker_cli(&p.cmd)).map(|p| p.cmd.clone()));
+                clients_now.extend(by_pid.get(&q).filter(|p| text::is_docker_cli(&p.cmd)).map(|p| p.pid));
                 stack.extend(kids.get(&q).into_iter().flatten().map(|k| k.pid));
             }
             ActivityView {
@@ -633,6 +660,7 @@ pub fn attribute(inp: Inputs) -> Report {
         why: g.why,
         dir: g.dir.as_ref().map(|d| d.replace(&home, "~")),
         shared: g.shared,
+        client: g.client,
         cpu: g.containers.iter().map(|c| c.cpu).sum(),
         mem: g.containers.iter().map(|c| c.mem).sum(),
         containers: g

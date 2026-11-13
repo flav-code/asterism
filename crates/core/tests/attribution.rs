@@ -1,5 +1,5 @@
 //! Attribution on recorded data: a process table, `docker inspect` output and session files, as plain JSON.
-use asterism_core::attribute::{Claim, Group, OwnerKind, attach, attribute, group_containers};
+use asterism_core::attribute::{Claim, Client, Group, OwnerKind, attach, attribute, group_containers};
 use asterism_core::docker::{Container, DockerInfo, summarize};
 use asterism_core::host::{Host, Proc};
 use asterism_core::sessions::{Activity, SessionMeta};
@@ -30,12 +30,21 @@ struct Fixture {
 fn evening() -> (Report, String) {
     let f: Fixture = serde_json::from_str(include_str!("fixtures/evening.json")).unwrap();
     let containers = f.containers.into_iter().map(|c| Container { cpu: c.cpu, mem: c.mem, ..summarize(&c.inspect) }).collect();
+    // what the Bash call that runs the tests said it was for
+    let said = HashMap::from([(
+        "aaaaaaaa-0000-4000-8000-000000000001".to_string(),
+        HashMap::from([(
+            "docker run --rm -v /Users/me/dev/app-convert:/app runtime:local npx vitest run".to_string(),
+            "Run the tests in /Users/me/dev/app-convert".to_string(),
+        )]),
+    )]);
     let report = attribute(Inputs {
         at: f.at,
         host: f.host,
         procs: &f.procs,
         sessions: &f.sessions,
         activities: &f.activities,
+        said: &said,
         containers,
         docker: Some(f.docker),
         home: &f.home,
@@ -59,6 +68,12 @@ fn every_session_gets_what_it_runs() {
     assert_eq!(convert.groups.iter().map(|g| (g.name.as_str(), g.why)).collect::<Vec<_>>(), [("nice_neumann", Some("client"))]);
     assert!(convert.groups[0].containers[0].unlimited);
     assert_eq!(convert.builds.iter().map(|b| b.container.as_deref()).collect::<Vec<_>>(), [Some("nice_neumann")]);
+    // its Bash call carries what the agent said it was for (home folder hidden), the docker command under it starts
+    // the container, and the call's row counts what it started
+    let call = convert.procs.iter().find(|p| p.pid == 301).unwrap();
+    assert_eq!(call.what.as_deref(), Some("Run the tests in ~/dev/app-convert"));
+    assert_eq!((convert.groups[0].client, call.tree_mem), (Some(302), 44_000_000));
+    assert!(convert.procs.iter().all(|p| p.pid == 301 || p.what.is_none()));
     let now = convert.activity.as_ref().unwrap();
     assert_eq!((now.tool.as_str(), now.pid), ("Bash", Some(301)));
     assert_eq!(now.mem, Some(44_000_000 + 3_100_000_000));
@@ -128,9 +143,11 @@ fn container(id: &str, name: &str, binds: &[&str], labels: &[(&str, &str)]) -> C
     }
 }
 
-fn claim(dirs: &[&str], visited: &[&str], clients: &[&str]) -> Claim {
+/// Each docker command with the second it started at; its process gets its place in the list, from 1.
+fn claim(dirs: &[&str], visited: &[&str], clients: &[(&str, u64)]) -> Claim {
     let own = |l: &[&str]| l.iter().map(|s| s.to_string()).collect();
-    Claim { dirs: own(dirs), visited: own(visited), clients: own(clients) }
+    let clients = clients.iter().zip(1..).map(|((cmd, start), pid)| Client { pid, start: *start, cmd: cmd.to_string() }).collect();
+    Claim { dirs: own(dirs), visited: own(visited), clients }
 }
 
 #[test]
@@ -155,7 +172,7 @@ fn containers_go_to_the_session_that_runs_or_holds_them() {
         claim(&["/src", "/src/app-convert", "/src/app-conv2"], &[], &[]),
         claim(&["/src", "/src/app/.worktrees/wt1", "/src/app"], &[], &[]),
         claim(&["/home/me/tracker"], &[], &[]),
-        claim(&["/src", "/src/app"], &[], &["docker exec -it web-1 sh", "docker ps"]),
+        claim(&["/src", "/src/app"], &[], &[("docker ps", 0), ("docker exec -it web-1 sh", 0)]),
         claim(&["/src/app-web"], &["/src/app-conv2", "/src/scratch"], &[]),
     ];
     attach(&mut groups, &claims);
@@ -182,5 +199,15 @@ fn containers_go_to_the_session_that_runs_or_holds_them() {
         ]
     );
     assert_eq!(groups[1].dir.as_deref(), Some("/src/app/.worktrees/wt1"));
-    assert_eq!(groups[6].client.as_deref(), Some("docker exec -it web-1 sh"));
+    assert_eq!(groups[6].client, Some(2));
+}
+
+#[test]
+fn a_container_goes_to_the_command_that_started_it() {
+    // two `docker run` of one session mount the same folder: each container is the one of the command started just before it
+    let started = |name: &str, at: u64| Container { started: at, ..container(name, name, &["/src/app"], &[]) };
+    let mut groups = group_containers(vec![started("a1", 1_010), started("a2", 1_302)]);
+    let run = "docker run --rm -v /src/app:/work img";
+    attach(&mut groups, &[claim(&[], &[], &[(run, 1_000), (run, 1_300)])]);
+    assert_eq!(groups.iter().map(|g| g.client).collect::<Vec<_>>(), [Some(1), Some(2)]);
 }
