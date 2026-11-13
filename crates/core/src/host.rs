@@ -83,7 +83,9 @@ impl HostSampler {
         let kind = ProcessRefreshKind::nothing()
             .with_cpu()
             .with_memory()
-            .with_cmd(UpdateKind::OnlyIfNotSet)
+            // Read again each time: a script that ends with `exec docker run …` becomes that command (6 ms more per
+            // sample for 870 processes).
+            .with_cmd(UpdateKind::Always)
             .with_exe(UpdateKind::OnlyIfNotSet)
             .with_cwd(UpdateKind::OnlyIfNotSet)
             .without_tasks();
