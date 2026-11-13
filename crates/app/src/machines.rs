@@ -221,6 +221,9 @@ fn follow(m: &Machine, lang: &str, stop: &AtomicBool, ssh: &Mutex<Option<Child>>
 fn ssh(m: &Machine) -> Command {
     let mut c = Command::new("ssh");
     c.args(["-T", "-C", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]);
+    // Never the one that opens a kept connection: with `ControlMaster auto` and `ControlPersist` in the person's
+    // configuration it stayed in the background, long after Asterism was closed. One already open is still used.
+    c.args(["-o", "ControlMaster=no"]);
     if let Some(port) = m.port {
         c.args(["-p", &port.to_string()]);
     }
@@ -459,6 +462,8 @@ mod tests {
         assert!(args[..host].windows(2).any(|w| w == ["-p", "2222"]), "{args:?}");
         assert!(args[..host].windows(2).any(|w| w[0] == "-i" && w[1] == key_text), "{args:?}");
         assert_eq!(args[host + 1], "me@box");
+        // no connection that would outlive the app, whatever the person's configuration keeps open
+        assert!(args[..host].windows(2).any(|w| w == ["-o", "ControlMaster=no"]), "{args:?}");
         assert_eq!(as_typed(&m), format!("-p 2222 -i {key_text} me@box"));
         std::fs::remove_file(&key).ok();
 
