@@ -3,7 +3,7 @@
 use crate::desktop::{DesktopSession, DesktopStore};
 use crate::sessions;
 use crate::transcripts::{Move, Transcripts};
-use crate::usage::{self, Biggest, DayKey, HourKey, PRICES, Totals, Usage};
+use crate::usage::{self, Biggest, DayKey, PRICES, Totals, Usage};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -138,7 +138,9 @@ pub struct Graph {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// A day's (or an hour's) totals of one model.
 pub struct DayRow {
+    /// The local day, "YYYY-MM-DD", or hour, "YYYY-MM-DDTHH".
     pub d: String,
     pub model: String,
     #[serde(deserialize_with = "fam_of")]
@@ -150,14 +152,6 @@ pub struct DayRow {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HourRow {
-    pub h: String,
-    #[serde(deserialize_with = "fam_of")]
-    pub fam: Family,
-    pub t: Totals,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionUsage {
     pub id: String,
     pub title: String,
@@ -165,6 +159,10 @@ pub struct SessionUsage {
     pub kind: NodeKind,
     /// Day → [output tokens, $, all tokens, $ spent by its subagents].
     pub days: BTreeMap<String, [f64; 4]>,
+    /// Hour → the same, for the last two days only: enough for "today" and "the last 24 hours", and every hour of
+    /// every session would make the usage sent by another machine much bigger.
+    #[serde(default)]
+    pub hours: BTreeMap<String, [f64; 4]>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -179,7 +177,8 @@ pub struct UsageView {
     pub first: u64,
     pub biggest: Option<Biggest>,
     pub days: Vec<DayRow>,
-    pub hours: Vec<HourRow>,
+    /// The same, per hour.
+    pub hours: Vec<DayRow>,
     /// (minute start in ms, totals), the last two hours.
     pub minutes: Vec<(u64, Totals)>,
     pub sessions: Vec<SessionUsage>,
@@ -753,17 +752,14 @@ impl Visualizer {
     /// Token usage as the dashboard shows it.
     pub fn usage_view(&self) -> UsageView {
         let u = &self.usage;
-        let days = u
-            .day
-            .iter()
-            .map(|(DayKey { day, model, agent }, t)| {
-                // What the cache saved: its reads, at the input price minus the cache read price.
-                let saved =
-                    PRICES.iter().find(|p| p.model == usage::model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.input - p.cache_read) / 1e6);
-                DayRow { d: day.clone(), model: model.clone(), fam: usage::family(model), agent: *agent, t: *t, saved }
-            })
-            .collect();
-        let hours = u.hour.iter().map(|(HourKey { hour, fam }, t)| HourRow { h: hour.clone(), fam, t: *t }).collect();
+        let row = |(DayKey { day, model, agent }, t): (&DayKey, &Totals)| {
+            // What the cache saved: its reads, at the input price minus the cache read price.
+            let saved =
+                PRICES.iter().find(|p| p.model == usage::model_id(model)).map_or(0.0, |p| t.cr as f64 * (p.input - p.cache_read) / 1e6);
+            DayRow { d: day.clone(), model: model.clone(), fam: usage::family(model), agent: *agent, t: *t, saved }
+        };
+        let (days, hours) = (u.day.iter().map(row).collect(), u.hour.iter().map(row).collect());
+        let recent = (chrono::Local::now() - chrono::Duration::hours(48)).format("%Y-%m-%dT%H").to_string();
         let minutes = u.minute.iter().map(|(m, t)| (m * 60_000, *t)).collect();
         let mut sessions: HashMap<String, SessionUsage> = HashMap::new();
         for (path, st) in &self.transcripts.files {
@@ -786,16 +782,22 @@ impl Visualizer {
                     let project = sessions::project_of(cwd.unwrap_or("?"));
                     Titled { title, project, kind: NodeKind::Cli }
                 });
-                SessionUsage { id, title, project, kind, days: BTreeMap::new() }
+                SessionUsage { id, title, project, kind, days: BTreeMap::new(), hours: BTreeMap::new() }
             });
-            for (d, t) in &st.tokens.days {
-                let x = entry.days.entry(d.clone()).or_default();
+            let add = |list: &mut BTreeMap<String, [f64; 4]>, at: &String, t: &Totals| {
+                let x = list.entry(at.clone()).or_default();
                 x[0] += t.o as f64;
                 x[1] += t.usd;
                 x[2] += t.all() as f64;
                 if st.agent {
                     x[3] += t.usd;
                 }
+            };
+            for (d, t) in &st.tokens.days {
+                add(&mut entry.days, d, t);
+            }
+            for (h, t) in st.tokens.hours.range(recent.clone()..) {
+                add(&mut entry.hours, h, t);
             }
         }
         let mut tools: Vec<(String, u64)> = u.tools.iter().map(|(k, v)| (k.clone(), *v)).collect();

@@ -1,6 +1,6 @@
 //! What the agent on another machine sends over SSH, one JSON frame per line: its map and token usage as patches.
 //! Each item travels whole under its key; after the first frame (everything) only what changed does.
-use crate::graph::{DayRow, Edge, Graph, HourRow, Msg, Node, SessionUsage, UsageView};
+use crate::graph::{DayRow, Edge, Graph, Msg, Node, SessionUsage, UsageView};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -28,11 +28,6 @@ impl Keyed for Edge {
 impl Keyed for DayRow {
     fn key(&self) -> String {
         format!("{}\t{}\t{}", self.d, self.model, self.agent)
-    }
-}
-impl Keyed for HourRow {
-    fn key(&self) -> String {
-        format!("{}\t{}", self.h, self.fam)
     }
 }
 impl Keyed for SessionUsage {
@@ -88,7 +83,7 @@ pub enum Frame {
     /// `rest` is the usage without its days, hours and sessions, which come as patches.
     Usage {
         days: Patch<DayRow>,
-        hours: Patch<HourRow>,
+        hours: Patch<DayRow>,
         sessions: Patch<SessionUsage>,
         rest: Box<UsageView>,
     },

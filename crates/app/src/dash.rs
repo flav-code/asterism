@@ -40,9 +40,14 @@ const CELL_H: f32 = 22.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Range {
     Today,
+    /// The current hour and the 23 before it.
+    Last24h,
     Days(i64),
     All,
 }
+
+/// The ranges in the order of their buttons.
+const RANGES: [Range; 6] = [Range::Today, Range::Last24h, Range::Days(7), Range::Days(30), Range::Days(90), Range::All];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Metric {
@@ -280,71 +285,64 @@ struct DayTotal {
 fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     let now = Local::now();
     let today = now.date_naive();
+    // An hourly range has a column per hour, keyed "YYYY-MM-DDTHH", and counts the hours' rows instead of the days'.
+    let hours: Vec<(String, String)> = match range {
+        Range::Today => (0..=now.hour()).map(|h| (format!("{}T{h:02}", day_key(today)), format!("{h:02}h"))).collect(),
+        Range::Last24h => (0..24)
+            .rev()
+            .map(|ago| now - chrono::Duration::hours(ago))
+            .map(|t| (t.format("%Y-%m-%dT%H").to_string(), format!("{} {:02}h", t.format(&i18n::names(&t, "%a %-d")), t.hour())))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let hourly = !hours.is_empty();
     let start = match range {
         Range::Today => today,
+        Range::Last24h => parse_day(&hours[0].0).unwrap_or(today),
         Range::Days(n) => today - chrono::Duration::days(n - 1),
         Range::All => Local.timestamp_millis_opt(u.first as i64).single().map_or(today, |t| t.date_naive()),
     };
-    let start_key = day_key(start);
-    let days: Vec<_> = u.days.iter().filter(|d| d.d >= start_key).collect();
+    // A day's key comes before the keys of its hours: "today" takes all of them.
+    let start_key = if range == Range::Last24h { hours[0].0.clone() } else { day_key(start) };
+    let days: Vec<_> = if hourly { &u.hours } else { &u.days }.iter().filter(|d| d.d >= start_key).collect();
     let sum = |f: &dyn Fn(&&DayRow) -> f64| days.iter().map(f).sum::<f64>();
     let tot_usd = sum(&|d| d.t.usd);
     let (i, o, cr, cw) = (sum(&|d| d.t.i as f64), sum(&|d| d.t.o as f64), sum(&|d| d.t.cr as f64), sum(&|d| d.t.cw as f64));
     let all = i + o + cr + cw;
 
-    // Columns: hours of today, or days of the range.
+    // Columns: hours of an hourly range, or days of the range.
     let fam_index = |f: &str| FAMS.iter().position(|x| *x == f).unwrap_or(4);
-    let cols: Vec<Col> = if range == Range::Today {
-        let mut cols: Vec<Col> = (0..=now.hour())
-            .map(|h| Col {
-                key: format!("h{h}"),
-                label: format!("{h:02}h"),
-                long: format!("{h:02}h"),
-                fams: [0.0; 5],
-                no_price: 0.0,
-                no_price_models: Vec::new(),
-            })
-            .collect();
-        let prefix = format!("{}T", day_key(today));
-        // An hour knows its families, not its models: the day's models with no price stand for each of its hours.
-        let today_no_price = no_price_models(days.iter().copied());
-        for h in u.hours.iter().filter(|h| h.h.starts_with(&prefix)) {
-            if let Some(c) = h.h[11..].parse::<usize>().ok().and_then(|hr| cols.get_mut(hr)) {
-                c.fams[fam_index(h.fam)] += metric.of(&h.t);
-                c.no_price += h.t.np as f64;
-                if h.t.np > 0 {
-                    c.no_price_models.clone_from(&today_no_price);
-                }
-            }
-        }
-        cols
+    let col =
+        |key: String, label: String, long: String| Col { key, label, long, fams: [0.0; 5], no_price: 0.0, no_price_models: Vec::new() };
+    let mut cols: Vec<Col> = if hourly {
+        hours.into_iter().map(|(key, long)| col(key.clone(), format!("{}h", &key[11..]), long)).collect()
     } else {
-        let mut index = BTreeMap::new();
         let mut cols = Vec::new();
         let mut d = start;
         while d <= today {
-            index.insert(day_key(d), cols.len());
-            cols.push(Col {
-                key: day_key(d),
-                label: d.format(&i18n::names(&d, "%-d %b")).to_string(),
-                long: d.format(&i18n::names(&d, "%a %-d %b")).to_string(),
-                fams: [0.0; 5],
-                no_price: 0.0,
-                no_price_models: Vec::new(),
-            });
+            cols.push(col(
+                day_key(d),
+                d.format(&i18n::names(&d, "%-d %b")).to_string(),
+                d.format(&i18n::names(&d, "%a %-d %b")).to_string(),
+            ));
             d += chrono::Duration::days(1);
-        }
-        for r in &days {
-            if let Some(&c) = index.get(&r.d) {
-                cols[c].fams[fam_index(r.fam)] += metric.of(&r.t);
-                cols[c].no_price += r.t.np as f64;
-            }
-        }
-        for (key, &c) in &index {
-            cols[c].no_price_models = no_price_models(days.iter().copied().filter(|r| r.d == *key));
         }
         cols
     };
+    // The hour that comes twice when clocks go back is one column.
+    let mut index = BTreeMap::new();
+    for (c, col) in cols.iter().enumerate() {
+        index.entry(col.key.clone()).or_insert(c);
+    }
+    for r in &days {
+        if let Some(&c) = index.get(&r.d) {
+            cols[c].fams[fam_index(r.fam)] += metric.of(&r.t);
+            cols[c].no_price += r.t.np as f64;
+        }
+    }
+    for (key, &c) in &index {
+        cols[c].no_price_models = no_price_models(days.iter().copied().filter(|r| r.d == *key));
+    }
     let legend = FAMS.iter().copied().filter(|f| days.iter().any(|d| d.fam == *f)).collect();
 
     let mut sessions: Vec<SessionRow> = u
@@ -352,7 +350,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
         .iter()
         .map(|s| {
             let mut v = [0.0; 4];
-            for (_, x) in s.days.range(start_key.clone()..) {
+            for (_, x) in if hourly { &s.hours } else { &s.days }.range(start_key.clone()..) {
                 for k in 0..4 {
                     v[k] += x[k];
                 }
@@ -386,7 +384,7 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     models.sort_by(|a, b| a.priced.cmp(&b.priced).then(b.usd.total_cmp(&a.usd)).then(b.output.total_cmp(&a.output)));
 
     // A week or less shows each of its days: added up by weekday, most rows of "today" would stay empty.
-    let heat_by_day = matches!(range, Range::Today | Range::Days(..=7));
+    let heat_by_day = matches!(range, Range::Today | Range::Last24h | Range::Days(..=7));
     let mut heat: Vec<HeatRow> = if heat_by_day {
         let days = (today - start).num_days().max(0);
         (0..=days)
@@ -399,8 +397,8 @@ fn compute(u: &UsageView, range: Range, metric: Metric) -> Dash {
     } else {
         (0..7).map(|wd| HeatRow { label: weekday(wd), cells: [HeatCell::default(); 24] }).collect()
     };
-    for h in u.hours.iter().filter(|h| h.h.as_str() >= start_key.as_str()) {
-        if let (Some(d), Ok(hr)) = (parse_day(&h.h), h.h[11..].parse::<usize>()) {
+    for h in u.hours.iter().filter(|h| h.d >= start_key) {
+        if let (Some(d), Ok(hr)) = (parse_day(&h.d), h.d[11..].parse::<usize>()) {
             let row = if heat_by_day { (d - start).num_days() } else { i64::from(d.weekday().num_days_from_monday()) };
             if let Some(row) = usize::try_from(row).ok().and_then(|r| heat.get_mut(r)) {
                 let cell = &mut row.cells[hr.min(23)];
@@ -614,6 +612,7 @@ impl DashView {
             usage: None,
             range: match cx.global::<Settings>().usage_range.as_str() {
                 "today" => Range::Today,
+                "24h" => Range::Last24h,
                 "7d" => Range::Days(7),
                 "90d" => Range::Days(90),
                 "all" => Range::All,
@@ -887,6 +886,7 @@ impl Render for DashView {
         // `label` stays English: it names the button and the saved setting; `text` is what shows.
         let ranges = [
             (Range::Today, "Today", t!("dash.range.today")),
+            (Range::Last24h, "24h", t!("dash.range.24h")),
             (Range::Days(7), "7d", t!("dash.range.7d")),
             (Range::Days(30), "30d", t!("dash.range.30d")),
             (Range::Days(90), "90d", t!("dash.range.90d")),
@@ -926,8 +926,7 @@ impl Render for DashView {
                 .into_any_element()
         })
         .collect();
-        let range_index =
-            [Range::Today, Range::Days(7), Range::Days(30), Range::Days(90), Range::All].iter().position(|r| *r == self.range).unwrap_or(2);
+        let range_index = RANGES.iter().position(|r| *r == self.range).unwrap_or(3);
         let metric_index = [Metric::Usd, Metric::Out, Metric::All, Metric::Replies].iter().position(|m| *m == self.metric).unwrap_or(0);
         // Wraps when the title and both controls don't fit on one line (French is longer).
         let head = div()
@@ -977,7 +976,8 @@ impl Render for DashView {
         let metric = self.metric;
         let hover = self.hover;
         let bars_d = d.clone();
-        let today_word = if self.range == Range::Today { t!("dash.now") } else { t!("dash.today") }.into_owned();
+        let hourly = matches!(self.range, Range::Today | Range::Last24h);
+        let today_word = if hourly { t!("dash.now") } else { t!("dash.today") }.into_owned();
         // A date label needs about this much room from "today" (wider in French), and from the next date.
         let near = 56.0 + 3.2 * today_word.chars().count().saturating_sub(5) as f32;
         let label_gap = d.cols.iter().map(|c| c.label.chars().count()).max().unwrap_or(0) as f32 * 6.3 + 8.0;
@@ -1266,11 +1266,8 @@ impl Render for DashView {
                     .child(t!("dash.no_price").into_owned()),
             )
         });
-        let chart_title = if self.range == Range::Today {
-            t!("dash.per_hour", metric = self.metric.name())
-        } else {
-            t!("dash.per_day", metric = self.metric.name())
-        };
+        let chart_title =
+            if hourly { t!("dash.per_hour", metric = self.metric.name()) } else { t!("dash.per_day", metric = self.metric.name()) };
         let models = d.models.iter().enumerate().map(|(i, m)| {
             let out = t!("dash.out", n = short(m.output)).into_owned();
             // A model with no price says so, where "$0.00" would read as free.
@@ -1463,7 +1460,45 @@ impl Render for DashView {
 
 #[cfg(test)]
 mod tests {
-    use super::{nice_ticks, pretty_model, short, usd};
+    use super::{Metric, Range, compute, nice_ticks, pretty_model, short, usd};
+    use asterism_core::graph::{DayRow, NodeKind, SessionUsage, UsageView};
+    use asterism_core::usage::Totals;
+    use chrono::Local;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn the_last_24_hours_count_hours_not_days() {
+        let now = Local::now();
+        let hour = |ago: i64| (now - chrono::Duration::hours(ago)).format("%Y-%m-%dT%H").to_string();
+        let row = |d: String, usd: f64| DayRow {
+            d,
+            model: "claude-opus-5-5".into(),
+            fam: "Opus",
+            agent: false,
+            t: Totals { o: 10, n: 1, usd, ..Totals::default() },
+            saved: 0.0,
+        };
+        let session = SessionUsage {
+            id: "s".into(),
+            title: "s".into(),
+            project: "p".into(),
+            kind: NodeKind::Cli,
+            days: BTreeMap::new(),
+            hours: BTreeMap::from([(hour(30), [10.0, 4.0, 10.0, 0.0]), (hour(2), [10.0, 2.0, 10.0, 0.0])]),
+        };
+        let u = UsageView {
+            first: (now - chrono::Duration::hours(30)).timestamp_millis() as u64,
+            hours: vec![row(hour(30), 4.0), row(hour(2), 2.0), row(hour(0), 1.0)],
+            sessions: vec![session],
+            ..UsageView::default()
+        };
+        let d = compute(&u, Range::Last24h, Metric::Usd);
+        // a column per hour, the reply of 30 hours ago left out everywhere
+        assert_eq!(d.cols.len(), 24);
+        assert_eq!((d.tot_usd, d.cols.iter().map(|c| c.fams.iter().sum::<f64>()).sum::<f64>()), (3.0, 3.0));
+        assert_eq!(d.sessions.iter().map(|s| s.usd).collect::<Vec<_>>(), [2.0]);
+        assert_eq!(d.models.iter().map(|m| m.usd).collect::<Vec<_>>(), [3.0]);
+    }
 
     #[test]
     fn formats() {

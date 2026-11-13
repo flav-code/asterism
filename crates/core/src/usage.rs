@@ -109,11 +109,13 @@ impl Totals {
     }
 }
 
-/// One transcript's own totals: overall and per local day.
+/// One transcript's own totals: overall, per local day and per local hour.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileTotals {
     pub total: Totals,
     pub days: BTreeMap<String, Totals>,
+    #[serde(default)]
+    pub hours: BTreeMap<String, Totals>,
     pub cwd: Option<String>,
     pub slug: Option<String>,
 }
@@ -125,25 +127,15 @@ pub struct Biggest {
     pub model: String,
 }
 
-/// What a day's totals are counted by.
+/// What a day's or an hour's totals are counted by.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DayKey {
-    /// The local day, "YYYY-MM-DD".
+    /// The local day, "YYYY-MM-DD", or hour, "YYYY-MM-DDTHH".
     pub day: String,
     /// The priced model id.
     pub model: String,
     /// Whether a subagent spent it.
     pub agent: bool,
-}
-
-/// What an hour's totals are counted by.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct HourKey {
-    /// The local hour, "YYYY-MM-DDTHH".
-    pub hour: String,
-    /// The model's family.
-    #[serde(deserialize_with = "crate::graph::fam_of")]
-    pub fam: crate::graph::Family,
 }
 
 /// A map whose keys are not text, written as a list of pairs: JSON only has text keys.
@@ -173,8 +165,9 @@ pub struct Usage {
     tool_ids: HashSet<String>,
     #[serde(with = "pairs")]
     pub day: HashMap<DayKey, Totals>,
+    /// By model too: a range of hours lists its models, as one of days does.
     #[serde(with = "pairs")]
-    pub hour: HashMap<HourKey, Totals>,
+    pub hour: HashMap<DayKey, Totals>,
     /// Minute (ms since the epoch / 60 000) → totals, the last two hours only.
     pub minute: BTreeMap<u64, Totals>,
     pub tools: HashMap<String, u64>,
@@ -229,12 +222,13 @@ impl Usage {
         let day = local.map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
         let hour = local.map_or_else(String::new, |d| format!("{day}T{:02}", d.hour()));
         self.day.entry(DayKey { day: day.clone(), model: model_id(model).to_string(), agent }).or_default().add(&r);
-        self.hour.entry(HourKey { hour, fam: family(model) }).or_default().add(&r);
+        self.hour.entry(DayKey { day: hour.clone(), model: model_id(model).to_string(), agent }).or_default().add(&r);
         if now_ms.saturating_sub(ts) < 2 * 3_600_000 {
             self.minute.entry(ts / 60_000).or_default().add(&r);
         }
         file.total.add(&r);
         file.days.entry(day).or_default().add(&r);
+        file.hours.entry(hour).or_default().add(&r);
         if file.cwd.is_none() {
             file.cwd = j.get("cwd").and_then(Value::as_str).map(str::to_string);
             file.slug = j.get("slug").and_then(Value::as_str).map(str::to_string);
@@ -302,5 +296,11 @@ mod tests {
         u.add(&mut f, &line, false, 0);
         u.add(&mut f, &line, false, 0);
         assert_eq!((f.total.o, f.total.usd, u.tools["Bash"], u.version), (1_000_000, 25.0, 1, 1));
+        // its hour knows its model, and its transcript its hour, as for its day
+        let (key, t) = u.hour.iter().next().expect("one hour");
+        assert_eq!(
+            (key.day.len(), key.model.as_str(), t.o, f.hours.values().map(|t| t.o).sum::<u64>()),
+            (13, "claude-opus-5", 1_000_000, 1_000_000)
+        );
     }
 }
